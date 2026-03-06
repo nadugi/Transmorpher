@@ -1620,9 +1620,33 @@ do
                     local isSuspendingNow = IsModelChangingForm()
 
                     local now = GetTime()
-                    if now - lastMorphCheck > 0.02 then -- Very aggressive throttle for form changes
+                    if now - lastMorphCheck > 0.02 then -- Aggressive throttle
                         lastMorphCheck = now
-                        TriggerReapply(0.01)
+                        
+                        -- ENTERING a form/mount: Near-instant suspension
+                        if IsModelChangingForm() then
+                            TriggerReapply(0.01)
+                        else
+                            -- LEAVING a form/mount: Continuous Restoration Watchdog
+                            -- Phase 1: Instant re-apply
+                            TriggerReapply(0.01)
+                            
+                            -- Phase 2: Ultra Burst restoration for 0.1 seconds
+                            -- Hammer the morph command every single game frame to kill any potential blink.
+                            local burst = CreateFrame("Frame")
+                            burst.totalTime = 0
+                            burst:SetScript("OnUpdate", function(self, elapsed)
+                                self.totalTime = self.totalTime + elapsed
+                                if self.totalTime > 0.1 then -- Done after 100ms
+                                    self:Hide()
+                                    self:SetScript("OnUpdate", nil)
+                                    return
+                                end
+                                
+                                -- Run every single frame (No throttle, absolute speed)
+                                ReapplyCurrentMorph()
+                            end)
+                        end
                     end
                 end
             end
