@@ -1,6 +1,6 @@
 local addon, ns = ...
 
-local mainFrameTitle = "|cff00d4ffTransmorpher |cffffffff1.0.2|r"
+local mainFrameTitle = "|cffF5C842Transmorpher|r  |cff6a6050v1.0.3|r"
 
 local sex = UnitSex("player")
 local _, raceFileName = UnitRace("player")
@@ -87,6 +87,10 @@ local defaultSettings = {
     useServerTimeInReceivedAppearances = false,
     ignoreUIScaling = false,
     saveMorphState = true,
+    saveMountMorph = true,
+    savePetMorph = true,
+    saveHunterPetMorph = true,
+    saveCombatPetMorph = true,
     showDBWProc = true,
     morphInShapeshift = false,
 }
@@ -142,12 +146,12 @@ local function IsModelChangingForm()
     local form = GetShapeshiftForm()
     if form == 0 then return false end
     
+    -- Only druid forms change the character model in a way that conflicts
+    -- with display morphs.  Shaman Ghost Wolf and Warlock Metamorphosis
+    -- are treated as normal display overrides — the morph display will
+    -- persist through them so e.g. a morphed-to-orc player stays orc.
     if classFileName == "DRUID" then
         return true -- All druid forms (Bear, Cat, Travel, Moonkin, Tree, Aquatic)
-    elseif classFileName == "SHAMAN" then
-        return form == 1 -- Ghost Wolf
-    elseif classFileName == "WARLOCK" then
-        return form == 1 -- Metamorphosis
     end
     
     return false
@@ -182,7 +186,8 @@ local function HasDBWProc()
 end
 
 local function TrackMorphCommand(cmd)
-    if not TransmorpherCharacterState then TransmorpherCharacterState = {Items={}, Morph=nil, Scale=nil} end
+    if not GetSettings().saveMorphState then return end
+    if not TransmorpherCharacterState then TransmorpherCharacterState = {Items={}, Morph=nil, Scale=nil, MountDisplay=nil, PetDisplay=nil, HunterPetDisplay=nil, HunterPetScale=nil} end
     if not TransmorpherCharacterState.Items then TransmorpherCharacterState.Items = {} end
 
     for singleCmd in cmd:gmatch("[^|]+") do
@@ -198,9 +203,32 @@ local function TrackMorphCommand(cmd)
             end
         elseif prefix == "SCALE" and parts[2] then
             TransmorpherCharacterState.Scale = tonumber(parts[2])
+        elseif prefix == "MOUNT_MORPH" and parts[2] then
+            if GetSettings().saveMountMorph then
+                TransmorpherCharacterState.MountDisplay = tonumber(parts[2])
+            end
+        elseif prefix == "MOUNT_RESET" then
+            TransmorpherCharacterState.MountDisplay = nil
+        elseif prefix == "PET_MORPH" and parts[2] then
+            if GetSettings().savePetMorph then
+                TransmorpherCharacterState.PetDisplay = tonumber(parts[2])
+            end
+        elseif prefix == "PET_RESET" then
+            TransmorpherCharacterState.PetDisplay = nil
+        elseif prefix == "HPET_MORPH" and parts[2] then
+            if GetSettings().saveCombatPetMorph or GetSettings().saveHunterPetMorph then
+                TransmorpherCharacterState.HunterPetDisplay = tonumber(parts[2])
+            end
+        elseif prefix == "HPET_SCALE" and parts[2] then
+            if GetSettings().saveCombatPetMorph or GetSettings().saveHunterPetMorph then
+                TransmorpherCharacterState.HunterPetScale = tonumber(parts[2])
+            end
+        elseif prefix == "HPET_RESET" then
+            TransmorpherCharacterState.HunterPetDisplay = nil
+            TransmorpherCharacterState.HunterPetScale = nil
         elseif prefix == "RESET" and parts[2] then
             if parts[2] == "ALL" then
-                TransmorpherCharacterState = {Items={}, Morph=nil, Scale=nil}
+                TransmorpherCharacterState = {Items={}, Morph=nil, Scale=nil, MountDisplay=nil, PetDisplay=nil, HunterPetDisplay=nil, HunterPetScale=nil}
             else
                 TransmorpherCharacterState.Items[tonumber(parts[2])] = nil
             end
@@ -226,23 +254,70 @@ local function SendRawMorphCommand(cmd)
     end
 end
 
--- Send all current morph state to the DLL (used on login/zone change)
--- The DLL's MorphGuard will then maintain these values automatically.
+-- ================================================================
+-- Creature ID lookup tables for textured 3D model preview
+-- ================================================================
+-- ================================================================
+-- Icon helper — returns a spell icon texture path for a given spellID.
+-- Falls back to a generic question-mark icon if the spell is unknown.
+-- ================================================================
+local FALLBACK_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
+local function GetSpellIcon(spellID)
+    if spellID and spellID > 0 then
+        local _, _, icon = GetSpellInfo(spellID)
+        if icon then return icon end
+    end
+    return FALLBACK_ICON
+end
+
+-- Flag: when true, the next SendFullMorphState prepends RESET:ALL so the
+-- DLL wipe + restore happen in ONE atomic batch (single 20 ms poll).
+-- Set on PLAYER_LOGIN so character-switch state bleed is impossible.
+local needsCharacterReset = false
+
+-- Send all current morph state to the DLL (used on login/zone change).
+-- If needsCharacterReset is set, RESET:ALL is prepended so the whole
+-- operation is one pipe-delimited string the DLL processes atomically.
+-- Uses SendRawMorphCommand (not SendMorphCommand) because we are restoring
+-- already-persisted state — no need to re-track into SavedVariables.
 local function SendFullMorphState()
-    if not TransmorpherCharacterState then return end
+    -- ALWAYS send RESET:ALL on character login to clear DLL state from
+    -- any previous character, even if saveMorphState is off.
+    if needsCharacterReset then
+        SendRawMorphCommand("RESET:ALL")
+        needsCharacterReset = false
+    end
+
+    if not GetSettings().saveMorphState then
+        return
+    end
+    if not TransmorpherCharacterState then
+        return
+    end
     if IsModelChangingForm() or dbwSuspended then return end
 
     local cmdQueue = {}
     if TransmorpherCharacterState.Scale then table.insert(cmdQueue, "SCALE:"..TransmorpherCharacterState.Scale) end
     if TransmorpherCharacterState.Morph then table.insert(cmdQueue, "MORPH:"..TransmorpherCharacterState.Morph) end
+    if TransmorpherCharacterState.MountDisplay and GetSettings().saveMountMorph then
+        table.insert(cmdQueue, "MOUNT_MORPH:"..TransmorpherCharacterState.MountDisplay)
+    end
+    if TransmorpherCharacterState.PetDisplay and GetSettings().savePetMorph then
+        table.insert(cmdQueue, "PET_MORPH:"..TransmorpherCharacterState.PetDisplay)
+    end
+    if TransmorpherCharacterState.HunterPetDisplay and (GetSettings().saveCombatPetMorph or GetSettings().saveHunterPetMorph) then
+        table.insert(cmdQueue, "HPET_MORPH:"..TransmorpherCharacterState.HunterPetDisplay)
+    end
+    if TransmorpherCharacterState.HunterPetScale and (GetSettings().saveCombatPetMorph or GetSettings().saveHunterPetMorph) then
+        table.insert(cmdQueue, "HPET_SCALE:"..TransmorpherCharacterState.HunterPetScale)
+    end
     if TransmorpherCharacterState.Items then
         for slot, item in pairs(TransmorpherCharacterState.Items) do
             table.insert(cmdQueue, "ITEM:"..slot..":"..item)
         end
     end
     if #cmdQueue > 0 then
-        -- Send as a single batch — DLL will process and MorphGuard takes over
-        SendMorphCommand(table.concat(cmdQueue, "|"))
+        SendRawMorphCommand(table.concat(cmdQueue, "|"))
     end
 end
 
@@ -275,16 +350,17 @@ do
     mainFrame:SetScript("OnHide", function() PlaySound("igCharacterInfoClose") end)
 
     local title = mainFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOP", 0, -12)
+    title:SetPoint("TOP", 0, -8)
     title:SetText(mainFrameTitle)
-    title:SetShadowColor(0, 0, 0, 1)
-    title:SetShadowOffset(2, -2)
+    title:SetFont("Fonts\\FRIZQT__.TTF", 14, "OUTLINE")
+    title:SetShadowColor(0, 0, 0, 0.8)
+    title:SetShadowOffset(1, -1)
 
     local titleBg = mainFrame:CreateTexture(nil, "BACKGROUND")
     titleBg:SetTexture("Interface\\PaperDollInfoFrame\\UI-GearManager-Title-Background")
     titleBg:SetPoint("TOPLEFT", 10, -7)
     titleBg:SetPoint("BOTTOMRIGHT", mainFrame, "TOPRIGHT", -28, -24)
-    titleBg:SetVertexColor(0.15, 0.15, 0.2, 1)
+    titleBg:SetVertexColor(0.14, 0.11, 0.04, 1)
 
     local menuBg = mainFrame:CreateTexture(nil, "BACKGROUND")
     menuBg:SetTexture("Interface\\WorldStateFrame\\WorldStateFinalScoreFrame-TopBackground")
@@ -292,7 +368,7 @@ do
     menuBg:SetPoint("TOPLEFT", 10, -26)
     menuBg:SetPoint("RIGHT", -6, 0)
     menuBg:SetHeight(48)
-    menuBg:SetVertexColor(0.1, 0.12, 0.15, 1)
+    menuBg:SetVertexColor(0.10, 0.08, 0.03, 1)
 
     local frameBg = mainFrame:CreateTexture(nil, "BACKGROUND")
     frameBg:SetTexture("Interface\\WorldStateFrame\\WorldStateFinalScoreFrame-TopBackground")
@@ -300,80 +376,80 @@ do
     frameBg:SetPoint("TOPLEFT", menuBg, "BOTTOMLEFT")
     frameBg:SetPoint("TOPRIGHT", menuBg, "BOTTOMRIGHT")
     frameBg:SetPoint("BOTTOM", 0, 5)
-    frameBg:SetVertexColor(0.08, 0.08, 0.12, 1)
+    frameBg:SetVertexColor(0.07, 0.06, 0.03, 1)
 
     local topLeft = mainFrame:CreateTexture(nil, "BORDER")
     topLeft:SetTexture("Interface\\PaperDollInfoFrame\\UI-GearManager-Border")
     topLeft:SetTexCoord(0.5, 0.625, 0, 1)
     topLeft:SetWidth(64) topLeft:SetHeight(64) topLeft:SetPoint("TOPLEFT")
-    topLeft:SetVertexColor(0.3, 0.35, 0.45, 1)
+    topLeft:SetVertexColor(0.85, 0.70, 0.25, 1)
 
     local topRight = mainFrame:CreateTexture(nil, "BORDER")
     topRight:SetTexture("Interface\\PaperDollInfoFrame\\UI-GearManager-Border")
     topRight:SetTexCoord(0.625, 0.75, 0, 1)
     topRight:SetWidth(64) topRight:SetHeight(64) topRight:SetPoint("TOPRIGHT")
-    topRight:SetVertexColor(0.3, 0.35, 0.45, 1)
+    topRight:SetVertexColor(0.85, 0.70, 0.25, 1)
 
     local top = mainFrame:CreateTexture(nil, "BORDER")
     top:SetTexture("Interface\\PaperDollInfoFrame\\UI-GearManager-Border")
     top:SetTexCoord(0.25, 0.37, 0, 1)
     top:SetPoint("TOPLEFT", topLeft, "TOPRIGHT")
     top:SetPoint("TOPRIGHT", topRight, "TOPLEFT")
-    top:SetVertexColor(0.3, 0.35, 0.45, 1)
+    top:SetVertexColor(0.85, 0.70, 0.25, 1)
 
     local menuSepL = mainFrame:CreateTexture(nil, "BORDER")
     menuSepL:SetTexture("Interface\\PaperDollInfoFrame\\UI-GearManager-Border")
     menuSepL:SetTexCoord(0.5, 0.5546875, 0.25, 0.53125)
     menuSepL:SetPoint("TOPLEFT", topLeft, "BOTTOMLEFT")
     menuSepL:SetWidth(28) menuSepL:SetHeight(18)
-    menuSepL:SetVertexColor(0.3, 0.35, 0.45, 1)
+    menuSepL:SetVertexColor(0.85, 0.70, 0.25, 1)
 
     local menuSepR = mainFrame:CreateTexture(nil, "BORDER")
     menuSepR:SetTexture("Interface\\PaperDollInfoFrame\\UI-GearManager-Border")
     menuSepR:SetTexCoord(0.7109375, 0.75, 0.25, 0.53125)
     menuSepR:SetPoint("TOPRIGHT", topRight, "BOTTOMRIGHT")
     menuSepR:SetWidth(20) menuSepR:SetHeight(18)
-    menuSepR:SetVertexColor(0.3, 0.35, 0.45, 1)
+    menuSepR:SetVertexColor(0.85, 0.70, 0.25, 1)
 
     local menuSepC = mainFrame:CreateTexture(nil, "BORDER")
     menuSepC:SetTexture("Interface\\PaperDollInfoFrame\\UI-GearManager-Border")
     menuSepC:SetTexCoord(0.564453125, 0.671875, 0.25, 0.53125)
     menuSepC:SetPoint("TOPLEFT", menuSepL, "TOPRIGHT")
     menuSepC:SetPoint("BOTTOMRIGHT", menuSepR, "BOTTOMLEFT")
-    menuSepC:SetVertexColor(0.3, 0.35, 0.45, 1)
+    menuSepC:SetVertexColor(0.85, 0.70, 0.25, 1)
 
     local botLeft = mainFrame:CreateTexture(nil, "BORDER")
     botLeft:SetTexture("Interface\\PaperDollInfoFrame\\UI-GearManager-Border")
     botLeft:SetTexCoord(0.75, 0.875, 0, 1)
     botLeft:SetPoint("BOTTOMLEFT") botLeft:SetWidth(64) botLeft:SetHeight(64)
-    botLeft:SetVertexColor(0.3, 0.35, 0.45, 1)
+    botLeft:SetVertexColor(0.85, 0.70, 0.25, 1)
 
     local left = mainFrame:CreateTexture(nil, "BORDER")
     left:SetTexture("Interface\\PaperDollInfoFrame\\UI-GearManager-Border")
     left:SetTexCoord(0, 0.125, 0, 1)
     left:SetPoint("TOPLEFT", menuSepL, "BOTTOMLEFT")
     left:SetPoint("BOTTOMRIGHT", botLeft, "TOPRIGHT")
-    left:SetVertexColor(0.3, 0.35, 0.45, 1)
+    left:SetVertexColor(0.85, 0.70, 0.25, 1)
 
     local botRight = mainFrame:CreateTexture(nil, "BORDER")
     botRight:SetTexture("Interface\\PaperDollInfoFrame\\UI-GearManager-Border")
     botRight:SetTexCoord(0.875, 1, 0, 1)
     botRight:SetPoint("BOTTOMRIGHT") botRight:SetWidth(64) botRight:SetHeight(64)
-    botRight:SetVertexColor(0.3, 0.35, 0.45, 1)
+    botRight:SetVertexColor(0.85, 0.70, 0.25, 1)
 
     local right = mainFrame:CreateTexture(nil, "BORDER")
     right:SetTexture("Interface\\PaperDollInfoFrame\\UI-GearManager-Border")
     right:SetTexCoord(0.125, 0.25, 0, 1)
     right:SetPoint("TOPRIGHT", menuSepR, "BOTTOMRIGHT", 4, 0)
     right:SetPoint("BOTTOMLEFT", botRight, "TOPLEFT", 4, 0)
-    right:SetVertexColor(0.3, 0.35, 0.45, 1)
+    right:SetVertexColor(0.85, 0.70, 0.25, 1)
 
     local bot = mainFrame:CreateTexture(nil, "BORDER")
     bot:SetTexture("Interface\\PaperDollInfoFrame\\UI-GearManager-Border")
     bot:SetTexCoord(0.38, 0.45, 0, 1)
     bot:SetPoint("BOTTOMLEFT", botLeft, "BOTTOMRIGHT")
     bot:SetPoint("TOPRIGHT", botRight, "TOPLEFT")
-    bot:SetVertexColor(0.3, 0.35, 0.45, 1)
+    bot:SetVertexColor(0.85, 0.70, 0.25, 1)
 
     local separatorV = mainFrame:CreateTexture(nil, "BORDER")
     separatorV:SetTexture("Interface\\PaperDollInfoFrame\\UI-GearManager-Border")
@@ -381,7 +457,7 @@ do
     separatorV:SetPoint("TOPLEFT", 410, -72)
     separatorV:SetPoint("BOTTOM", 0, 32)
     separatorV:SetWidth(3)
-    separatorV:SetVertexColor(0.2, 0.5, 0.8, 0.8)
+    separatorV:SetVertexColor(0.85, 0.70, 0.25, 0.7)
 
     mainFrame.stats = CreateFrame("Frame", nil, mainFrame)
     local stats = mainFrame.stats
@@ -391,8 +467,8 @@ do
         tile = true, tileSize = 16, edgeSize = 16,
         insets = { left = 3, right = 3, top = 5, bottom = 3 }
     })
-    stats:SetBackdropColor(0.05, 0.05, 0.08, 0.95)
-    stats:SetBackdropBorderColor(0.2, 0.5, 0.8, 0.8)
+    stats:SetBackdropColor(0.05, 0.04, 0.02, 0.95)
+    stats:SetBackdropBorderColor(0.80, 0.65, 0.22, 0.85)
     stats:SetPoint("BOTTOMLEFT", 410, 8)
     stats:SetPoint("BOTTOMRIGHT", -6, 8)
     stats:SetHeight(24)
@@ -401,7 +477,7 @@ do
     mainFrame.morphStatus = stats:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     mainFrame.morphStatus:SetPoint("CENTER")
     mainFrame.morphStatus:SetText("")
-    mainFrame.morphStatus:SetTextColor(0.7, 0.9, 1, 1)
+    mainFrame.morphStatus:SetTextColor(1.0, 0.84, 0.40, 1)
 
     mainFrame.buttons = {}
 
@@ -424,10 +500,12 @@ do
     border:SetAllPoints()
     border:SetBackdrop(dressingRoomBorderBackdrop)
     border:SetBackdropColor(0, 0, 0, 0)
-    border:SetBackdropBorderColor(0.3, 0.5, 0.8, 0.9)
+    border:SetBackdropBorderColor(0.80, 0.65, 0.22, 0.9)
 
+    -- Race-specific background textures (from images/ folder)
     dr.backgroundTextures = {}
-    for s in ("human,nightelf,dwarf,gnome,draenei,orc,scourge,tauren,troll,bloodelf,deathknight"):gmatch("%w+") do
+    local bgKeys = "human,nightelf,dwarf,gnome,draenei,orc,scourge,tauren,troll,bloodelf,deathknight,highelf"
+    for s in bgKeys:gmatch("%w+") do
         dr.backgroundTextures[s] = dr:CreateTexture(nil, "BACKGROUND")
         dr.backgroundTextures[s]:SetTexture("Interface\\AddOns\\Transmorpher\\images\\"..s)
         dr.backgroundTextures[s]:SetAllPoints()
@@ -438,11 +516,52 @@ do
     dr.backgroundTextures["color"]:SetTexture(1, 1, 1)
     dr.backgroundTextures["color"]:Hide()
 
+    -- Map raceFileName → background texture key
+    local raceToBgKey = {
+        Human    = "human",
+        NightElf = "nightelf",
+        Dwarf    = "dwarf",
+        Gnome    = "gnome",
+        Draenei  = "draenei",
+        Orc      = "orc",
+        Scourge  = "scourge",
+        Tauren   = "tauren",
+        Troll    = "troll",
+        BloodElf = "bloodelf",
+    }
+
+    -- Show the correct race background for the current character
+    function dr:ShowRaceBackground()
+        -- Hide all backgrounds first
+        for key, tex in pairs(self.backgroundTextures) do
+            tex:Hide()
+        end
+        -- Determine which background to use
+        local settings = GetSettings()
+        local bgKey = settings.dressingRoomBackgroundTexture[GetRealmName()]
+            and settings.dressingRoomBackgroundTexture[GetRealmName()][GetUnitName("player")]
+        -- If setting says DEATHKNIGHT, use deathknight bg
+        if bgKey == "DEATHKNIGHT" then
+            bgKey = "deathknight"
+        else
+            -- Map race filename to our texture key
+            bgKey = raceToBgKey[bgKey] or raceToBgKey[raceFileName] or "human"
+        end
+        if self.backgroundTextures[bgKey] then
+            self.backgroundTextures[bgKey]:Show()
+            self.backgroundTextures[bgKey]:SetAlpha(0.4)
+        end
+    end
+
+    -- Show background on dressing room show
+    dr:HookScript("OnShow", function(self) self:ShowRaceBackground() end)
+
     local tip = dr:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     tip:SetPoint("BOTTOM", dr, "TOP", 0, 12)
+    tip:SetWidth(dr:GetWidth())  -- Constrain to dressing room width
     tip:SetJustifyH("CENTER") tip:SetJustifyV("BOTTOM")
-    tip:SetText("\124cff66ff66Left Mouse:\124r rotate \124 \124cff66ff66Right Mouse:\124r pan\124n\124cff66ff66Wheel\124r or \124cff66ff66Alt + Right Mouse:\124r zoom")
-    tip:SetTextColor(0.8, 0.9, 1, 1)
+    tip:SetText("\124cffC8AA6ELeft Mouse:\124r rotate \124 \124cffC8AA6ERight Mouse:\124r pan\124n\124cffC8AA6EWheel\124r or \124cffC8AA6EAlt + Right Mouse:\124r zoom")
+    tip:SetTextColor(0.75, 0.7, 0.6, 0.9)
     tip:SetShadowColor(0, 0, 0, 1)
     tip:SetShadowOffset(1, -1)
 
@@ -470,7 +589,7 @@ do
     btn:SetPoint("TOPLEFT", mainFrame.dressingRoom, "BOTTOMLEFT")
     btn:SetPoint("BOTTOM", mainFrame.stats, "BOTTOM", 0, 1)
     btn:SetWidth(mainFrame.dressingRoom:GetWidth()/4)
-    btn:SetText("|cff66ff66Apply All|r")
+    btn:SetText("|cffF5C842Apply All|r")
     
     -- Modern button styling
     btn:SetBackdrop({
@@ -479,12 +598,12 @@ do
         tile = false, tileSize = 16, edgeSize = 12,
         insets = { left = 2, right = 2, top = 2, bottom = 2 }
     })
-    btn:SetBackdropColor(0.1, 0.3, 0.1, 0.8)
-    btn:SetBackdropBorderColor(0.3, 0.8, 0.3, 1)
+    btn:SetBackdropColor(0.12, 0.22, 0.10, 0.9)
+    btn:SetBackdropBorderColor(0.4, 0.6, 0.25, 1)
     
     btn:SetScript("OnClick", function()
         if not IsMorpherReady() then
-            SELECTED_CHAT_FRAME:AddMessage("|cff00d4ff<Transmorpher>|r: |cffff0000Morpher DLL not loaded! Place wow_morpher.dll in your WoW folder.|r")
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: |cffff0000Morpher DLL not loaded! Place wow_morpher.dll in your WoW folder.|r")
             return
         end
         for _, slotName in pairs(slotOrder) do
@@ -493,20 +612,22 @@ do
                 SendMorphCommand("ITEM:" .. slotToEquipSlotId[slotName] .. ":" .. slot.itemId)
             end
         end
-        SELECTED_CHAT_FRAME:AddMessage("|cff00d4ff<Transmorpher>|r: All slots morphed!")
+        SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: All slots morphed!")
         PlaySound("gsTitleOptionOK")
     end)
     btn:HookScript("OnEnter", function(self)
-        self:SetBackdropBorderColor(0.5, 1, 0.5, 1)
+        self:SetBackdropColor(0.18, 0.30, 0.14, 0.95)
+        self:SetBackdropBorderColor(0.55, 0.75, 0.35, 1)
         GameTooltip:SetOwner(self, "ANCHOR_TOPLEFT")
         GameTooltip:ClearLines()
-        GameTooltip:AddLine("|cff66ff66Apply All|r", 1, 1, 1)
+        GameTooltip:AddLine("|cffF5C842Apply All|r", 1, 1, 1)
         GameTooltip:AddLine("Apply all previewed items as morph to your character.", 0.7, 0.9, 1, 1, true)
         GameTooltip:AddLine("Requires wow_morpher.dll in your WoW folder.", 0.6, 0.6, 0.6, 1, true)
         GameTooltip:Show()
     end)
     btn:HookScript("OnLeave", function(self)
-        self:SetBackdropBorderColor(0.3, 0.8, 0.3, 1)
+        self:SetBackdropColor(0.12, 0.22, 0.10, 0.9)
+        self:SetBackdropBorderColor(0.4, 0.6, 0.25, 1)
         GameTooltip:Hide()
     end)
 end
@@ -516,8 +637,9 @@ mainFrame.buttons.resetMorph = CreateFrame("Button", "$parentButtonResetMorph", 
 do
     local btn = mainFrame.buttons.resetMorph
     btn:SetPoint("TOPLEFT", mainFrame.buttons.applyAll, "TOPRIGHT")
+    btn:SetPoint("BOTTOM", mainFrame.buttons.applyAll, "BOTTOM")
     btn:SetWidth(mainFrame.buttons.applyAll:GetWidth())
-    btn:SetText("|cffff8888Reset Morph|r")
+    btn:SetText("|cffD4A44EReset Morph|r")
     
     -- Modern button styling
     btn:SetBackdrop({
@@ -526,26 +648,28 @@ do
         tile = false, tileSize = 16, edgeSize = 12,
         insets = { left = 2, right = 2, top = 2, bottom = 2 }
     })
-    btn:SetBackdropColor(0.3, 0.1, 0.1, 0.8)
-    btn:SetBackdropBorderColor(0.8, 0.3, 0.3, 1)
+    btn:SetBackdropColor(0.20, 0.15, 0.05, 0.9)
+    btn:SetBackdropBorderColor(0.55, 0.42, 0.15, 1)
     
     btn:SetScript("OnClick", function()
         if IsMorpherReady() then
             SendMorphCommand("RESET:ALL")
-            SELECTED_CHAT_FRAME:AddMessage("|cff00d4ff<Transmorpher>|r: All morphs reset!")
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: All morphs reset!")
         end
         PlaySound("gsTitleOptionOK")
     end)
     btn:HookScript("OnEnter", function(self)
-        self:SetBackdropBorderColor(1, 0.5, 0.5, 1)
+        self:SetBackdropColor(0.28, 0.22, 0.08, 0.95)
+        self:SetBackdropBorderColor(0.75, 0.58, 0.22, 1)
         GameTooltip:SetOwner(self, "ANCHOR_TOPLEFT")
         GameTooltip:ClearLines()
-        GameTooltip:AddLine("|cffff8888Reset Morph|r", 1, 1, 1)
+        GameTooltip:AddLine("|cffD4A44EReset Morph|r", 1, 1, 1)
         GameTooltip:AddLine("Revert all morphed slots back to your real equipped gear.", 0.7, 0.9, 1, 1, true)
         GameTooltip:Show()
     end)
     btn:HookScript("OnLeave", function(self)
-        self:SetBackdropBorderColor(0.8, 0.3, 0.3, 1)
+        self:SetBackdropColor(0.20, 0.15, 0.05, 0.9)
+        self:SetBackdropBorderColor(0.55, 0.42, 0.15, 1)
         GameTooltip:Hide()
     end)
 end
@@ -555,8 +679,9 @@ mainFrame.buttons.reset = CreateFrame("Button", "$parentButtonReset", mainFrame,
 do
     local btn = mainFrame.buttons.reset
     btn:SetPoint("TOPLEFT", mainFrame.buttons.resetMorph, "TOPRIGHT")
+    btn:SetPoint("BOTTOM", mainFrame.buttons.applyAll, "BOTTOM")
     btn:SetWidth(mainFrame.buttons.applyAll:GetWidth())
-    btn:SetText("|cffaaddffReset Preview|r")
+    btn:SetText("|cff8CB4D8Reset Preview|r")
     
     -- Modern button styling
     btn:SetBackdrop({
@@ -565,18 +690,20 @@ do
         tile = false, tileSize = 16, edgeSize = 12,
         insets = { left = 2, right = 2, top = 2, bottom = 2 }
     })
-    btn:SetBackdropColor(0.1, 0.15, 0.25, 0.8)
-    btn:SetBackdropBorderColor(0.4, 0.6, 0.9, 1)
+    btn:SetBackdropColor(0.08, 0.12, 0.20, 0.9)
+    btn:SetBackdropBorderColor(0.3, 0.42, 0.6, 1)
     
     btn:SetScript("OnClick", function()
         mainFrame.dressingRoom:Reset()
         PlaySound("gsTitleOptionOK")
     end)
     btn:HookScript("OnEnter", function(self)
-        self:SetBackdropBorderColor(0.6, 0.8, 1, 1)
+        self:SetBackdropColor(0.12, 0.18, 0.28, 0.95)
+        self:SetBackdropBorderColor(0.4, 0.55, 0.8, 1)
     end)
     btn:HookScript("OnLeave", function(self)
-        self:SetBackdropBorderColor(0.4, 0.6, 0.9, 1)
+        self:SetBackdropColor(0.08, 0.12, 0.20, 0.9)
+        self:SetBackdropBorderColor(0.3, 0.42, 0.6, 1)
     end)
 end
 
@@ -586,8 +713,8 @@ do
     local btn = mainFrame.buttons.undress
     btn:SetPoint("TOPLEFT", mainFrame.buttons.reset, "TOPRIGHT")
     btn:SetPoint("TOPRIGHT", mainFrame.dressingRoom, "BOTTOMRIGHT")
-    btn:SetWidth(mainFrame.buttons.applyAll:GetWidth())
-    btn:SetText("|cffffdd88Undress|r")
+    btn:SetPoint("BOTTOM", mainFrame.buttons.applyAll, "BOTTOM")
+    btn:SetText("|cffD4A44EUndress|r")
     
     -- Modern button styling
     btn:SetBackdrop({
@@ -596,18 +723,20 @@ do
         tile = false, tileSize = 16, edgeSize = 12,
         insets = { left = 2, right = 2, top = 2, bottom = 2 }
     })
-    btn:SetBackdropColor(0.2, 0.15, 0.1, 0.8)
-    btn:SetBackdropBorderColor(0.8, 0.6, 0.3, 1)
+    btn:SetBackdropColor(0.18, 0.13, 0.06, 0.9)
+    btn:SetBackdropBorderColor(0.55, 0.45, 0.2, 1)
     
     btn:SetScript("OnClick", function()
         mainFrame.dressingRoom:Undress()
         PlaySound("gsTitleOptionOK")
     end)
     btn:HookScript("OnEnter", function(self)
-        self:SetBackdropBorderColor(1, 0.8, 0.5, 1)
+        self:SetBackdropColor(0.25, 0.18, 0.08, 0.95)
+        self:SetBackdropBorderColor(0.7, 0.58, 0.3, 1)
     end)
     btn:HookScript("OnLeave", function(self)
-        self:SetBackdropBorderColor(0.8, 0.6, 0.3, 1)
+        self:SetBackdropColor(0.18, 0.13, 0.06, 0.9)
+        self:SetBackdropBorderColor(0.55, 0.45, 0.2, 1)
     end)
 end
 
@@ -647,50 +776,131 @@ end
 
 ---------------- TABS ----------------
 
-local TAB_NAMES = {"Items Preview", "Appearances", "Morph", "Settings"}
+local TAB_NAMES = {"Items Preview", "Appearances", "Mounts", "Pets", "Combat Pets", "Morph", "Settings"}
 mainFrame.tabs = {}
 
 do
     local tabs = {}
-    local function tab_OnClick(self)
-        local selectedTab = PanelTemplates_GetSelectedTab(self:GetParent())
-        local tab = tabs[selectedTab]
-        if tab ~= nil then tab:Hide() end
-        PanelTemplates_SetTab(self:GetParent(), self:GetID())
-        tabs[self:GetID()]:Show()
-        PlaySound("gsTitleOptionOK")
-        
-        -- Update tab appearance for modern look
-        for i = 1, #TAB_NAMES do
+    local selectedTabIdx = 1
+
+    -- Compute total width available for tabs (right side of the frame)
+    local TAB_AREA_LEFT = 412    -- where tabs start (matches separator)
+    local TAB_AREA_RIGHT = 1045 - 10  -- mainFrame width minus right padding
+    local TAB_AREA_WIDTH = TAB_AREA_RIGHT - TAB_AREA_LEFT
+    local TAB_COUNT = #TAB_NAMES
+    local TAB_H = 26
+    local TAB_GAP = 0  -- no gap — tabs sit flush against each other
+    local TAB_W = math.floor(TAB_AREA_WIDTH / TAB_COUNT)
+    local TAB_TOP = -30  -- vertical position from mainFrame top
+
+    local function UpdateTabAppearance()
+        for i = 1, TAB_COUNT do
             local tabBtn = mainFrame.buttons["tab"..i]
-            if i == self:GetID() then
-                tabBtn:GetFontString():SetTextColor(0.4, 0.8, 1, 1)
+            if i == selectedTabIdx then
+                tabBtn.bg:SetTexture(0.12, 0.10, 0.07, 1)
+                tabBtn.topLine:SetTexture(0.96, 0.78, 0.26, 1)
+                tabBtn.topLine:Show()
+                tabBtn.botLine:Hide()
+                tabBtn:GetFontString():SetTextColor(0.96, 0.78, 0.26, 1)
             else
-                tabBtn:GetFontString():SetTextColor(0.7, 0.7, 0.7, 1)
+                tabBtn.bg:SetTexture(0.06, 0.05, 0.04, 0.95)
+                tabBtn.topLine:Hide()
+                tabBtn.botLine:SetTexture(0.35, 0.28, 0.14, 0.6)
+                tabBtn.botLine:Show()
+                tabBtn:GetFontString():SetTextColor(0.55, 0.50, 0.40, 1)
             end
         end
     end
-    for i = 1, #TAB_NAMES do
-        mainFrame.buttons["tab"..i] = CreateFrame("Button", "$parentTab"..i, mainFrame, "OptionsFrameTabButtonTemplate")
-        local btn = mainFrame.buttons["tab"..i]
-        btn:SetText(TAB_NAMES[i]) btn:SetID(i)
-        if i == 1 then btn:SetPoint("BOTTOMLEFT", btn:GetParent(), "TOPLEFT", 410, -70)
-        else btn:SetPoint("LEFT", _G[mainFrame:GetName().."Tab"..(i - 1)], "RIGHT") end
+
+    local function tab_OnClick(self)
+        local prevTab = tabs[selectedTabIdx]
+        if prevTab then prevTab:Hide() end
+        selectedTabIdx = self:GetID()
+        tabs[selectedTabIdx]:Show()
+        PlaySound("gsTitleOptionOK")
+        UpdateTabAppearance()
+    end
+
+    for i = 1, TAB_COUNT do
+        local btn = CreateFrame("Button", "$parentTab"..i, mainFrame)
+        mainFrame.buttons["tab"..i] = btn
+        btn:SetID(i)
+        btn:SetSize(TAB_W, TAB_H)
+
+        if i == 1 then
+            btn:SetPoint("TOPLEFT", mainFrame, "TOPLEFT", TAB_AREA_LEFT, TAB_TOP)
+        else
+            btn:SetPoint("LEFT", mainFrame.buttons["tab"..(i - 1)], "RIGHT", TAB_GAP, 0)
+        end
+        -- Last tab stretches to fill remaining space
+        if i == TAB_COUNT then
+            btn:SetPoint("RIGHT", mainFrame, "RIGHT", -10, 0)
+        end
+
+        -- Solid background
+        local bg = btn:CreateTexture(nil, "BACKGROUND")
+        bg:SetAllPoints()
+        bg:SetTexture(0.06, 0.05, 0.04, 0.95)
+        btn.bg = bg
+
+        -- Gold top line (active indicator, 2px)
+        local topLine = btn:CreateTexture(nil, "OVERLAY")
+        topLine:SetHeight(2)
+        topLine:SetPoint("TOPLEFT", btn, "TOPLEFT", 0, 0)
+        topLine:SetPoint("TOPRIGHT", btn, "TOPRIGHT", 0, 0)
+        topLine:SetTexture(0.96, 0.78, 0.26, 1)
+        topLine:Hide()
+        btn.topLine = topLine
+
+        -- Subtle bottom border (inactive indicator, 1px)
+        local botLine = btn:CreateTexture(nil, "OVERLAY")
+        botLine:SetHeight(1)
+        botLine:SetPoint("BOTTOMLEFT", btn, "BOTTOMLEFT", 0, 0)
+        botLine:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", 0, 0)
+        botLine:SetTexture(0.35, 0.28, 0.14, 0.6)
+        btn.botLine = botLine
+
+        -- Left edge separator (skip first tab)
+        if i > 1 then
+            local sep = btn:CreateTexture(nil, "OVERLAY")
+            sep:SetWidth(1)
+            sep:SetPoint("TOPLEFT", btn, "TOPLEFT", 0, -3)
+            sep:SetPoint("BOTTOMLEFT", btn, "BOTTOMLEFT", 0, 3)
+            sep:SetTexture(0.3, 0.25, 0.15, 0.4)
+        end
+
+        -- Highlight on hover
+        local htex = btn:CreateTexture(nil, "HIGHLIGHT")
+        htex:SetAllPoints()
+        htex:SetTexture(1, 1, 1, 0.06)
+        btn:SetHighlightTexture(htex)
+
+        -- Label
+        local fs = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        fs:SetPoint("CENTER", 0, 0)
+        fs:SetText(TAB_NAMES[i])
+        fs:SetTextColor(0.55, 0.50, 0.40, 1)
+        btn:SetFontString(fs)
+
         btn:SetScript("OnClick", tab_OnClick)
-        
-        -- Modern tab styling
-        btn:GetFontString():SetTextColor(0.7, 0.7, 0.7, 1)
-        
+
+        -- Content frame for this tab (positioned below the tab row)
         local frame = CreateFrame("Frame", "$parentTab"..i.."Content", mainFrame)
-        frame:SetPoint("TOPLEFT", 410, -73) frame:SetPoint("BOTTOMRIGHT", -8, 28) frame:Hide()
+        frame:SetPoint("TOPLEFT", TAB_AREA_LEFT, TAB_TOP - TAB_H - 2)
+        frame:SetPoint("BOTTOMRIGHT", -8, 36)
+        frame:Hide()
         table.insert(tabs, frame)
     end
-    PanelTemplates_SetNumTabs(mainFrame, #TAB_NAMES)
-    tab_OnClick(_G[mainFrame:GetName().."Tab1"])
+
+    -- Select first tab
+    tab_OnClick(mainFrame.buttons["tab1"])
     mainFrame.tabs.preview = tabs[1]
     mainFrame.tabs.appearances = tabs[2]
-    mainFrame.tabs.morph = tabs[3]
-    mainFrame.tabs.settings = tabs[4]
+    mainFrame.tabs.mounts = tabs[3]
+    mainFrame.tabs.pets = tabs[4]
+    mainFrame.tabs.combatPets = tabs[5]
+    mainFrame.tabs.morph = tabs[6]
+    mainFrame.tabs.settings = tabs[7]
 end
 
 ---------------- SLOTS ----------------
@@ -706,8 +916,8 @@ end
 local function slot_OnShiftLeftClick(self)
     if self.itemId ~= nil then
         local _, link = GetItemInfo(self.itemId)
-        if link then SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: "..link.." ("..self.itemId..")")
-        else SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: Item cannot be used for transmogrification.") end
+        if link then SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: "..link.." ("..self.itemId..")")
+        else SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Item cannot be used for transmogrification.") end
     end
 end
 
@@ -800,9 +1010,9 @@ do
             if button == "LeftButton" and IsAltKeyDown() and self.itemId and slotToEquipSlotId[self.slotName] then
                 if IsMorpherReady() then
                     SendMorphCommand("ITEM:" .. slotToEquipSlotId[self.slotName] .. ":" .. self.itemId)
-                    SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: Morphed "..self.slotName.."!")
+                    SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Morphed "..self.slotName.."!")
                 else
-                    SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: |cffff0000DLL not loaded!|r")
+                    SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: |cffff0000DLL not loaded!|r")
                 end
                 PlaySound("gsTitleOptionOK")
                 return
@@ -890,11 +1100,136 @@ do
     local list = mainFrame.tabs.preview.list
     local slider = mainFrame.tabs.preview.slider
 
-    list:SetPoint("TOPLEFT") list:SetSize(601, 401)
+    -- ======== TOP TOOLBAR: Search bar (left) + Custom dropdown (right) ========
+
+    -- Dropdown container (right side, fixed width)
+    local dropContainer = CreateFrame("Frame", nil, previewTab)
+    previewTab.dropContainer = dropContainer
+    dropContainer:SetSize(170, 26)
+    dropContainer:SetPoint("TOPRIGHT", -6, -6)
+    dropContainer:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    })
+    dropContainer:SetBackdropColor(0.06, 0.05, 0.03, 0.95)
+    dropContainer:SetBackdropBorderColor(0.60, 0.50, 0.18, 0.8)
+
+    -- Dropdown button (the clickable label + arrow inside the container)
+    local dropBtn = CreateFrame("Button", "$parentSubDropBtn", dropContainer)
+    previewTab.dropBtn = dropBtn
+    dropBtn:SetAllPoints()
+    dropBtn:EnableMouse(true)
+
+    local dropText = dropBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    previewTab.dropText = dropText
+    dropText:SetPoint("LEFT", 8, 0)
+    dropText:SetPoint("RIGHT", -20, 0)
+    dropText:SetJustifyH("LEFT")
+    dropText:SetTextColor(0.95, 0.88, 0.65)
+    dropText:SetText("Mail")
+
+    local dropArrow = dropBtn:CreateTexture(nil, "OVERLAY")
+    previewTab.dropArrow = dropArrow
+    dropArrow:SetSize(14, 14)
+    dropArrow:SetPoint("RIGHT", -4, 0)
+    dropArrow:SetTexture("Interface\\ChatFrame\\ChatFrameExpandArrow")
+    dropArrow:SetVertexColor(0.80, 0.65, 0.22)
+
+    -- Hover highlight on dropdown
+    dropBtn:SetScript("OnEnter", function(self)
+        dropContainer:SetBackdropBorderColor(0.80, 0.65, 0.22, 1)
+    end)
+    dropBtn:SetScript("OnLeave", function(self)
+        dropContainer:SetBackdropBorderColor(0.60, 0.50, 0.18, 0.8)
+    end)
+
+    -- Dropdown list (shown on click)
+    local dropList = CreateFrame("Frame", "$parentSubDropList", previewTab)
+    previewTab.dropList = dropList
+    dropList:SetPoint("TOPLEFT", dropContainer, "BOTTOMLEFT", 0, 2)
+    dropList:SetPoint("TOPRIGHT", dropContainer, "BOTTOMRIGHT", 0, 2)
+    dropList:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 2, right = 2, top = 2, bottom = 2 }
+    })
+    dropList:SetBackdropColor(0.06, 0.05, 0.03, 0.97)
+    dropList:SetBackdropBorderColor(0.80, 0.65, 0.22, 0.9)
+    dropList:SetFrameStrata("DIALOG")
+    dropList:Hide()
+
+    local DROP_ROW_H = 20
+    previewTab.DROP_ROW_H = DROP_ROW_H
+    local dropListButtons = {}
+    previewTab.dropListButtons = dropListButtons
+
+    -- Search bar container (left side, flexible width)
+    local searchContainer = CreateFrame("Frame", nil, previewTab)
+    searchContainer:SetPoint("TOPLEFT", 6, -6)
+    searchContainer:SetPoint("RIGHT", dropContainer, "LEFT", -6, 0)
+    searchContainer:SetHeight(26)
+    searchContainer:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    })
+    searchContainer:SetBackdropColor(0.06, 0.05, 0.03, 0.95)
+    searchContainer:SetBackdropBorderColor(0.60, 0.50, 0.18, 0.8)
+
+    local searchIcon = searchContainer:CreateTexture(nil, "OVERLAY")
+    searchIcon:SetSize(14, 14)
+    searchIcon:SetPoint("LEFT", 6, 0)
+    searchIcon:SetTexture("Interface\\Common\\UI-Searchbox-Icon")
+    searchIcon:SetVertexColor(0.80, 0.65, 0.22)
+
+    local searchBox = CreateFrame("EditBox", "$parentPreviewSearch", searchContainer)
+    searchBox:SetPoint("LEFT", searchIcon, "RIGHT", 4, 0)
+    searchBox:SetPoint("RIGHT", -24, 0)
+    searchBox:SetHeight(18)
+    searchBox:SetAutoFocus(false)
+    searchBox:SetMaxLetters(60)
+    searchBox:SetFont("Fonts\\FRIZQT__.TTF", 11)
+    searchBox:SetTextColor(0.95, 0.88, 0.65)
+    searchBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
+    local searchPlaceholder = searchBox:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    searchPlaceholder:SetPoint("LEFT", 2, 0)
+    searchPlaceholder:SetText("Search by name or item ID...")
+    searchBox:SetScript("OnEditFocusGained", function() searchPlaceholder:Hide() end)
+    searchBox:SetScript("OnEditFocusLost", function(self)
+        if self:GetText() == "" then searchPlaceholder:Show() end
+    end)
+
+    local searchClear = CreateFrame("Button", nil, searchContainer)
+    searchClear:SetSize(14, 14)
+    searchClear:SetPoint("RIGHT", -4, 0)
+    searchClear:SetNormalTexture("Interface\\FriendsFrame\\ClearBroadcastIcon")
+    searchClear:SetAlpha(0.5)
+    searchClear:Hide()
+    searchClear:SetScript("OnEnter", function(self) self:SetAlpha(1) end)
+    searchClear:SetScript("OnLeave", function(self) self:SetAlpha(0.5) end)
+    searchClear:SetScript("OnClick", function()
+        searchBox:SetText("")
+        searchBox:ClearFocus()
+        searchPlaceholder:Show()
+        searchClear:Hide()
+        previewTab.searchQuery = ""
+    end)
+
+    -- Search state
+    previewTab.searchQuery = ""
+    previewTab.searchResults = nil  -- nil = no filter active
+
+    list:SetPoint("TOPLEFT", 0, -34) list:SetSize(601, 367)
 
     local label = list:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     label:SetPoint("TOP", list, "BOTTOM", 0, -5)
     label:SetJustifyH("CENTER") label:SetHeight(10)
+    label:SetTextColor(0.85, 0.70, 0.40)
 
     slider:SetPoint("TOPRIGHT", -6, -21) slider:SetPoint("BOTTOMRIGHT", -6, 21)
     slider:EnableMouseWheel(true)
@@ -918,14 +1253,9 @@ do
     end)
 
     slider:SetMinMaxValues(0, 0) slider:SetValueStep(1)
-end
 
 ---------------- Preview list logic ----------------
 
-do
-    local previewTab = mainFrame.tabs.preview
-    local list = previewTab.list
-    local slider = previewTab.slider
     local slotSubclassPage = {}
     for slot, _ in pairs(mainFrame.slots) do slotSubclassPage[slot] = {} end
 
@@ -934,38 +1264,107 @@ do
 
     -- Hair hiding functionality removed
 
+    -- Core update function (with search filtering support)
     previewTab.Update = function(self, slot, subclass)
         slotSubclassPage[currSlot][currSubclass] = slider:GetValue() > 0 and slider:GetValue() or 1
         currSlot = slot currSubclass = subclass
         records = ns.GetSubclassRecords(slot, subclass)
-        local itemIds = {} local selectedItemId
-        for i=1, #records do
-            local ids = records[i][1]
-            table.insert(itemIds, ids[1])
-            if selectedItemId == nil and mainFrame.slots[slot].itemId ~= nil and arrayHasValue(ids, mainFrame.slots[slot].itemId) then
-                selectedItemId = ids[1]
+        if not records then records = {} end
+
+        -- Build filtered records based on search
+        local query = previewTab.searchQuery or ""
+        local filteredRecords = {}
+        local filteredItemIds = {}
+        local selectedItemId
+
+        if query ~= "" then
+            local lowerQ = query:lower()
+            local numQ = tonumber(query)
+            for i = 1, #records do
+                local ids = records[i][1]
+                local names = records[i][2]
+                local match = false
+                for j = 1, #ids do
+                    if numQ and ids[j] == numQ then match = true; break end
+                    if names[j] and names[j]:lower():find(lowerQ, 1, true) then match = true; break end
+                end
+                if match then
+                    table.insert(filteredRecords, records[i])
+                    table.insert(filteredItemIds, ids[1])
+                    if selectedItemId == nil and mainFrame.slots[slot].itemId ~= nil and arrayHasValue(ids, mainFrame.slots[slot].itemId) then
+                        selectedItemId = ids[1]
+                    end
+                end
+            end
+            -- Replace records reference for tooltip/click handlers
+            records = filteredRecords
+        else
+            for i = 1, #records do
+                local ids = records[i][1]
+                table.insert(filteredItemIds, ids[1])
+                if selectedItemId == nil and mainFrame.slots[slot].itemId ~= nil and arrayHasValue(ids, mainFrame.slots[slot].itemId) then
+                    selectedItemId = ids[1]
+                end
             end
         end
-        list:SetItems(itemIds)
+
+        list:SetItems(filteredItemIds)
         if selectedItemId ~= nil then list:SelectByItemId(selectedItemId) end
 
-        local setup = ns.GetPreviewSetup(previewSetupVersion, raceFileName, sex, slot, subclass)
-        list:SetupModel(setup.width, setup.height, setup.x, setup.y, setup.z, setup.facing, setup.sequence)
+        -- Only setup model + paginate if there are items to show
+        if #filteredItemIds > 0 then
+            local setup = ns.GetPreviewSetup(previewSetupVersion, raceFileName, sex, slot, subclass)
+            list:SetupModel(setup.width, setup.height, setup.x, setup.y, setup.z, setup.facing, setup.sequence)
 
-        list:TryOn(nil)
-        local page = slotSubclassPage[slot][subclass] ~= nil and slotSubclassPage[slot][subclass] or 1
-        local pageCount = list:GetPageCount()
-        local _, sliderMax = slider:GetMinMaxValues()
-        if page > sliderMax then slider:SetMinMaxValues(1, pageCount) end
-        if slider:GetValue() ~= page then slider:SetValue(page)
-        else list:SetPage(page) list:Update() end
-        slider:SetMinMaxValues(1, pageCount)
+            list:TryOn(nil)
+            local page = 1
+            if query == "" then
+                page = slotSubclassPage[slot][subclass] ~= nil and slotSubclassPage[slot][subclass] or 1
+            end
+            local pageCount = list:GetPageCount()
+            if pageCount < 1 then pageCount = 1 end
+            if page > pageCount then page = pageCount end
+            slider:SetMinMaxValues(1, pageCount)
+            if slider:GetValue() ~= page then slider:SetValue(page)
+            else list:SetPage(page) list:Update() end
+        else
+            slider:SetMinMaxValues(1, 1)
+            slider:SetValue(1)
+        end
     end
 
     previewTab:SetScript("OnShow", function(self) self:Update(currSlot, currSubclass) end)
 
+    -- Search bar event handlers
+    local searchTimer = CreateFrame("Frame")
+    searchTimer:Hide()
+    searchTimer.elapsed = 0
+    searchTimer:SetScript("OnUpdate", function(self, dt)
+        self.elapsed = self.elapsed + dt
+        if self.elapsed >= 0.3 then
+            self:Hide()
+            previewTab:Update(currSlot, currSubclass)
+        end
+    end)
+
+    searchBox:SetScript("OnTextChanged", function(self)
+        local text = self:GetText()
+        previewTab.searchQuery = text
+        if text ~= "" then searchClear:Show(); searchPlaceholder:Hide()
+        else searchClear:Hide() end
+        -- Debounce: wait 0.3s after last keystroke
+        searchTimer.elapsed = 0
+        searchTimer:Show()
+    end)
+    searchBox:SetScript("OnEnterPressed", function(self)
+        searchTimer:Hide()
+        previewTab:Update(currSlot, currSubclass)
+        self:ClearFocus()
+    end)
+
     slider:HookScript("OnValueChanged", function(self, value)
-        list:SetPage(value) list:Update()
+        list:SetPage(value)
+        if #list.itemIds > 0 then list:Update() end
     end)
 
     local selectedInRecord = {}
@@ -974,6 +1373,7 @@ do
 
     list.onEnter = function(self)
         local recordIndex = self:GetParent().itemIndex
+        if not records or not records[recordIndex] then return end
         local ids = records[recordIndex][1]
         local names = records[recordIndex][2]
         GameTooltip:Hide() GameTooltip:SetOwner(self, "ANCHOR_TOPLEFT") GameTooltip:ClearLines()
@@ -1006,6 +1406,7 @@ do
 
     list.onItemClick = function(self, button)
         local recordIndex = self:GetParent().itemIndex
+        if not records or not records[recordIndex] then return end
         local ids = records[recordIndex][1]
         local selectedIndex = selectedInRecord[ids[1]] ~= nil and selectedInRecord[ids[1]] or 1
         local itemId = ids[selectedIndex]
@@ -1013,7 +1414,7 @@ do
             local names = records[recordIndex][2]
             local color = names[selectedIndex]:sub(1, 10)
             local name = names[selectedIndex]:sub(11, -3)
-            SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: "..color.."\124Hitem:"..itemId..":::::::|h["..name.."]\124h\124r".." ("..itemId..")")
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: "..color.."\124Hitem:"..itemId..":::::::|h["..name.."]\124h\124r".." ("..itemId..")")
         elseif IsControlKeyDown() then
             ns.ShowWowheadURLDialog(itemId)
         else
@@ -1023,14 +1424,24 @@ do
     end
 end
 
----------------- SUBCLASS MENU ----------------
+---------------- SUBCLASS MENU (Custom Golden Dropdown) ----------------
 
-mainFrame.tabs.preview.subclassMenu = CreateFrame("Frame", "$parentSubclassMenu", mainFrame.tabs.preview, "UIDropDownMenuTemplate")
+-- Replaces UIDropDownMenuTemplate with a custom themed dropdown
+-- Uses dropContainer, dropBtn, dropText, dropArrow, dropList, dropListButtons
+-- created in the preview tab block above.
+mainFrame.tabs.preview.subclassMenu = {}
 do
     local previewTab = mainFrame.tabs.preview
     local menu = mainFrame.tabs.preview.subclassMenu
-    menu:SetPoint("TOPRIGHT", -120, 38)
-    UIDropDownMenu_JustifyText(menu, "LEFT")
+
+    -- Pull references from the preview tab scope
+    local dropContainer = previewTab.dropContainer
+    local dropBtn = previewTab.dropBtn
+    local dropText = previewTab.dropText
+    local dropArrow = previewTab.dropArrow
+    local dropList = previewTab.dropList
+    local dropListButtons = previewTab.dropListButtons
+    local DROP_ROW_H = previewTab.DROP_ROW_H
 
     local slotSelectedSubclass = {}
     for i, slot in ipairs(armorSlots) do slotSelectedSubclass[slot] = defaultArmorSubclass[classFileName] end
@@ -1040,32 +1451,111 @@ do
     slotSelectedSubclass[offHandSlot] = slotSubclasses[offHandSlot][1]
     slotSelectedSubclass[rangedSlot] = slotSubclasses[rangedSlot][1]
 
-    local function menu_OnClick(self, slot, subclass)
-        previewTab:Update(slot, subclass)
-        slotSelectedSubclass[slot] = subclass
-        UIDropDownMenu_SetText(menu, subclass)
+    menu.currentSlot = nil
+
+    local function BuildDropList(slot)
+        -- Hide any previous buttons
+        for _, b in ipairs(dropListButtons) do b:Hide() end
+
+        local subclasses = slotSubclasses[slot]
+        if not subclasses then return end
+
+        local totalH = 0
+        for i, subclass in ipairs(subclasses) do
+            local btn = dropListButtons[i]
+            if not btn then
+                btn = CreateFrame("Button", nil, dropList)
+                btn:SetHeight(DROP_ROW_H)
+                btn:SetPoint("TOPLEFT", 4, -4 - (i - 1) * DROP_ROW_H)
+                btn:SetPoint("TOPRIGHT", -4, -4 - (i - 1) * DROP_ROW_H)
+                btn:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+                btn:GetHighlightTexture():SetVertexColor(0.80, 0.65, 0.22, 0.3)
+                btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                btn.text:SetPoint("LEFT", 6, 0)
+                btn.text:SetJustifyH("LEFT")
+                btn.check = btn:CreateTexture(nil, "OVERLAY")
+                btn.check:SetSize(12, 12)
+                btn.check:SetPoint("RIGHT", -4, 0)
+                btn.check:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+                btn.check:SetVertexColor(0.95, 0.80, 0.30)
+                dropListButtons[i] = btn
+            end
+
+            local isSelected = (subclass == slotSelectedSubclass[slot])
+            btn.text:SetText(subclass)
+            if isSelected then
+                btn.text:SetTextColor(1.0, 0.84, 0.40)
+                btn.check:Show()
+            else
+                btn.text:SetTextColor(0.85, 0.78, 0.55)
+                btn.check:Hide()
+            end
+
+            btn:SetScript("OnClick", function()
+                slotSelectedSubclass[slot] = subclass
+                dropText:SetText(subclass)
+                dropList:Hide()
+                previewTab:Update(slot, subclass)
+            end)
+            btn:Show()
+            totalH = totalH + DROP_ROW_H
+        end
+        dropList:SetHeight(totalH + 8)
     end
 
-    local initializer = { ["slot"] = nil,
-        ["__call"] = function(self, frame)
-            local info = UIDropDownMenu_CreateInfo()
-            for i, subclass in ipairs(slotSubclasses[self.slot]) do
-                info.text = subclass
-                info.checked = subclass == UIDropDownMenu_GetText(frame)
-                info.arg1 = self.slot info.arg2 = subclass info.func = menu_OnClick
-                UIDropDownMenu_AddButton(info)
+    -- Toggle dropdown on click
+    dropBtn:SetScript("OnClick", function()
+        if dropList:IsShown() then
+            dropList:Hide()
+        else
+            if menu.currentSlot then
+                BuildDropList(menu.currentSlot)
             end
-        end,
-    }
-    setmetatable(initializer, initializer)
+            dropList:Show()
+        end
+    end)
 
+    -- Auto-close dropdown when mouse leaves both the button and the list
+    dropList:SetScript("OnUpdate", function(self)
+        if not self:IsShown() then return end
+        if dropBtn:IsMouseOver() or self:IsMouseOver() then return end
+        -- Check if hovering a row button
+        for _, b in ipairs(dropListButtons) do
+            if b:IsShown() and b:IsMouseOver() then return end
+        end
+        -- Not hovering anything — hide after a tiny grace period
+        if not self.leaveTimer then self.leaveTimer = 0 end
+        self.leaveTimer = self.leaveTimer + 0.02
+        if self.leaveTimer > 0.35 then
+            self:Hide()
+            self.leaveTimer = nil
+        end
+    end)
+
+    -- Reset timer when mouse re-enters
+    dropList:HookScript("OnShow", function(self) self.leaveTimer = nil end)
+    dropBtn:HookScript("OnEnter", function() dropList.leaveTimer = nil end)
+    dropList:HookScript("OnEnter", function(self) self.leaveTimer = nil end)
+
+    -- Update function called by slot_OnLeftClick
     menu.Update = function(self, slot)
-        if #slotSubclasses[slot] > 1 then UIDropDownMenu_EnableDropDown(self)
-        else UIDropDownMenu_DisableDropDown(self) end
-        UIDropDownMenu_SetText(self, slotSelectedSubclass[slot])
-        initializer.slot = slot
-        previewTab:Update(slot, slotSelectedSubclass[slot])
-        UIDropDownMenu_Initialize(self, initializer)
+        self.currentSlot = slot
+        local subclass = slotSelectedSubclass[slot]
+        dropText:SetText(subclass)
+        dropList:Hide()
+
+        -- Enable/disable appearance
+        if #slotSubclasses[slot] > 1 then
+            dropArrow:SetVertexColor(0.80, 0.65, 0.22)
+            dropText:SetTextColor(0.95, 0.88, 0.65)
+            dropBtn:Enable()
+        else
+            dropArrow:SetVertexColor(0.40, 0.35, 0.20)
+            dropText:SetTextColor(0.50, 0.45, 0.30)
+            dropBtn:Disable()
+        end
+
+        previewTab:Update(slot, subclass)
     end
 end
 
@@ -1075,17 +1565,165 @@ mainFrame.tabs.appearances.saved = CreateFrame("Frame", "$parentSaved", mainFram
 do
     local appearancesTab = mainFrame.tabs.appearances
     local frame = appearancesTab.saved
-    frame:SetPoint("TOP", 0, -30) frame:SetPoint("BOTTOM", 0, 30) frame:SetWidth(400)
+
+    -- List panel on the left side (narrower to make room for preview)
+    frame:SetPoint("TOPLEFT", 0, -30) frame:SetPoint("BOTTOMLEFT", 0, 30) frame:SetWidth(320)
     frame:SetBackdrop({ bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 16,
         insets = { left = 3, right = 3, top = 3, bottom = 3 }})
-    frame:SetBackdropColor(0.05, 0.05, 0.08, 0.95)
-    frame:SetBackdropBorderColor(0.2, 0.5, 0.8, 0.8)
+    frame:SetBackdropColor(0.04, 0.03, 0.03, 0.95)
+    frame:SetBackdropBorderColor(0.80, 0.65, 0.22, 0.85)
 
     local scrollFrame = CreateFrame("ScrollFrame", "$parentScrollFrame", frame, "UIPanelScrollFrameTemplate")
     scrollFrame:SetPoint("TOPLEFT", 8, -8) scrollFrame:SetPoint("BOTTOMLEFT", 8, 8)
     scrollFrame:SetWidth(frame:GetWidth() - 25)
 
+    -- ============================================================
+    -- Preview model on the right side
+    -- ============================================================
+    local previewFrame = CreateFrame("Frame", "$parentLookPreview", appearancesTab)
+    previewFrame:SetPoint("TOPLEFT", frame, "TOPRIGHT", 8, 0)
+    previewFrame:SetPoint("BOTTOMLEFT", frame, "BOTTOMRIGHT", 8, 0)
+    previewFrame:SetWidth(290)
+    previewFrame:SetBackdrop({ bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 16,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 }})
+    previewFrame:SetBackdropColor(0.04, 0.03, 0.03, 0.95)
+    previewFrame:SetBackdropBorderColor(0.80, 0.65, 0.22, 0.85)
+
+    local previewModel = CreateFrame("DressUpModel", "$parentPreviewModel", previewFrame)
+    previewModel:SetPoint("TOPLEFT", 6, -6)
+    previewModel:SetPoint("BOTTOMRIGHT", -6, 30)
+    previewModel:SetUnit("player")
+    previewModel:SetFacing(-0.4)
+    previewModel:SetPosition(0, 0, 0)
+
+    -- Mouse rotation on the preview model
+    local previewRotating = false
+    previewModel:EnableMouse(true)
+    previewModel:SetScript("OnMouseDown", function(self, button)
+        if button == "LeftButton" then previewRotating = true end
+    end)
+    previewModel:SetScript("OnMouseUp", function(self, button)
+        if button == "LeftButton" then previewRotating = false end
+    end)
+    previewModel:SetScript("OnUpdate", function(self, dt)
+        if previewRotating and IsMouseButtonDown("LeftButton") then
+            local x, y = GetCursorPosition()
+            local scale = UIParent:GetEffectiveScale()
+            x = x / scale
+            if self.lastX then
+                local dx = x - self.lastX
+                self:SetFacing(self:GetFacing() + dx * 0.02)
+            end
+            self.lastX = x
+        else
+            self.lastX = nil
+        end
+    end)
+    previewModel:EnableMouseWheel(true)
+    previewModel:SetScript("OnMouseWheel", function(self, delta)
+        local x, y, z = self:GetPosition()
+        x = x + delta * 0.3
+        if x < -2 then x = -2 end
+        if x > 4 then x = 4 end
+        self:SetPosition(x, y, z)
+    end)
+
+    -- Label under the preview
+    local previewLabel = previewFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    previewLabel:SetPoint("BOTTOM", previewFrame, "BOTTOM", 0, 10)
+    previewLabel:SetText("|cff8a7d6aSelect a look to preview|r")
+
+    -- "No preview" text when empty
+    local noPreviewText = previewFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    noPreviewText:SetPoint("CENTER", previewModel, "CENTER")
+    noPreviewText:SetText("|cff4a4540No Look Selected|r")
+
+    -- Function to update the preview model with a saved look's items
+    -- Uses item caching to fix weapons not showing in preview
+    local lookPreviewTimer = CreateFrame("Frame")
+    lookPreviewTimer:Hide()
+
+    local function UpdateLookPreview(lookItems, lookName)
+        lookPreviewTimer:Hide()
+        lookPreviewTimer:SetScript("OnUpdate", nil)
+
+        if not lookItems then
+            noPreviewText:Show()
+            previewLabel:SetText("|cff8a7d6aSelect a look to preview|r")
+            previewModel:SetUnit("player")
+            previewModel:Undress()
+            return
+        end
+        noPreviewText:Hide()
+        previewLabel:SetText("|cffffd700" .. (lookName or "Preview") .. "|r")
+
+        -- Collect all valid item IDs from the look
+        local pendingItems = {}
+        for index, slotName in pairs(slotOrder) do
+            local itemId = lookItems[index]
+            if itemId and itemId ~= 0 then
+                table.insert(pendingItems, itemId)
+            end
+        end
+
+        -- Pre-cache all items, then dress the model once all are ready
+        local function DressModel()
+            previewModel:SetUnit("player")
+            previewModel:Undress()
+            for _, itemId in ipairs(pendingItems) do
+                previewModel:TryOn(itemId)
+            end
+        end
+
+        -- First pass: trigger cache for all items
+        local uncached = 0
+        for _, itemId in ipairs(pendingItems) do
+            local _, itemLink = GetItemInfo(itemId)
+            if not itemLink then
+                uncached = uncached + 1
+                ns.QueryItem(itemId, nil)
+            end
+        end
+
+        -- If all cached, dress immediately
+        if uncached == 0 then
+            DressModel()
+            return
+        end
+
+        -- Otherwise dress now (partial), then retry after items load
+        DressModel()
+        local retryCount = 0
+        local retryMax = 15  -- ~1.5 seconds of retries
+        lookPreviewTimer.elapsed = 0
+        lookPreviewTimer:SetScript("OnUpdate", function(self, dt)
+            self.elapsed = self.elapsed + dt
+            if self.elapsed >= 0.1 then
+                self.elapsed = 0
+                retryCount = retryCount + 1
+
+                -- Check if all items are now cached
+                local allCached = true
+                for _, itemId in ipairs(pendingItems) do
+                    local _, itemLink = GetItemInfo(itemId)
+                    if not itemLink then allCached = false; break end
+                end
+
+                if allCached or retryCount >= retryMax then
+                    DressModel()
+                    self:Hide()
+                    self:SetScript("OnUpdate", nil)
+                end
+            end
+        end)
+        lookPreviewTimer:Show()
+    end
+
+    -- ============================================================
+    -- Top buttons
+    -- ============================================================
     local btnSave = CreateFrame("Button", "$parentButtonSave", frame, "UIPanelButtonTemplate2")
     btnSave:SetSize(80, 22) btnSave:SetPoint("TOP", frame, "TOP", 0, 28)
     btnSave:SetText("Save") btnSave:SetScript("OnClick", function() PlaySound("gsTitleOptionOK") end) btnSave:Disable()
@@ -1105,7 +1743,7 @@ do
     -- NEW: Apply Look button
     local btnApplyLook = CreateFrame("Button", "$parentButtonApplyLook", frame, "UIPanelButtonTemplate2")
     btnApplyLook:SetSize(110, 22) btnApplyLook:SetPoint("BOTTOMLEFT", frame, "BOTTOM", 5, -28)
-    btnApplyLook:SetText("|cff00ff00Apply Morph|r")
+    btnApplyLook:SetText("|cffF5C842Apply Morph|r")
     btnApplyLook:SetScript("OnClick", function() PlaySound("gsTitleOptionOK") end) btnApplyLook:Disable()
 
     local listFrame = ns.CreateListFrame("$parentSavedLooks", nil, scrollFrame)
@@ -1113,12 +1751,21 @@ do
     listFrame:SetScript("OnShow", function(self)
         if self.selected == nil then
             btnTryOn:Disable() btnRemove:Disable() btnSave:Disable() btnApplyLook:Disable()
+            UpdateLookPreview(nil, nil)
         else
             btnTryOn:Enable() btnRemove:Enable() btnSave:Enable() btnApplyLook:Enable()
         end
     end)
     listFrame.onSelect = function()
         btnTryOn:Enable() btnRemove:Enable() btnSave:Enable() btnApplyLook:Enable()
+        -- Update the preview model with the selected look
+        if listFrame:GetSelected() and _G["TransmorpherSavedLooks"] then
+            local id = listFrame.buttons[listFrame:GetSelected()]:GetID()
+            local look = _G["TransmorpherSavedLooks"][id]
+            if look then
+                UpdateLookPreview(look.items, look.name)
+            end
+        end
     end
 
     local function slots2ItemList()
@@ -1148,6 +1795,7 @@ do
     listFrame:SetScript("OnEvent", function(self, event, addonName)
         if addonName == addon and event == "ADDON_LOADED" then
             if _G["TransmorpherSavedLooks"] == nil then _G["TransmorpherSavedLooks"] = {} end
+            if _G["TransmorpherMorphFavorites"] == nil then _G["TransmorpherMorphFavorites"] = {} end
             buildList()
             scrollFrame:SetScrollChild(listFrame)
         end
@@ -1167,7 +1815,7 @@ do
     -- Apply saved look as morph
     btnApplyLook:HookScript("OnClick", function()
         if not IsMorpherReady() then
-            SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: |cffff0000DLL not loaded!|r")
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: |cffff0000DLL not loaded!|r")
             return
         end
         local savedLooks = _G["TransmorpherSavedLooks"]
@@ -1178,7 +1826,7 @@ do
                     SendMorphCommand("ITEM:" .. slotToEquipSlotId[slotName] .. ":" .. itemId)
             end
         end
-        SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: Look applied as morph!")
+        SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Look applied as morph!")
     end)
 
     StaticPopupDialogs["Transmorpher_SAVE_DIALOG"] = {
@@ -1190,7 +1838,7 @@ do
             if lookName ~= "" then
                 table.insert(_G["TransmorpherSavedLooks"], {["name"] = lookName, ["items"] = slots2ItemList()})
                 listFrame:AddItem(lookName)
-                SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: Look '"..lookName.."' saved!")
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Look '"..lookName.."' saved!")
             end
         end,
         OnShow = function(self) self.editBox:SetText("") end,
@@ -1202,7 +1850,7 @@ do
         if listFrame:GetSelected() then
             local id = listFrame.buttons[listFrame:GetSelected()]:GetID()
             _G["TransmorpherSavedLooks"][id].items = slots2ItemList()
-            SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: Look updated!")
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Look updated!")
         end
     end)
 
@@ -1212,6 +1860,16 @@ do
             table.remove(_G["TransmorpherSavedLooks"], id)
             listFrame:RemoveItem(listFrame:GetSelected())
             btnTryOn:Disable() btnRemove:Disable() btnSave:Disable() btnApplyLook:Disable()
+            UpdateLookPreview(nil, nil)
+        end
+    end)
+
+    -- Also update preview after saving/overwriting
+    btnSave:HookScript("OnClick", function()
+        if listFrame:GetSelected() and _G["TransmorpherSavedLooks"] then
+            local id = listFrame.buttons[listFrame:GetSelected()]:GetID()
+            local look = _G["TransmorpherSavedLooks"][id]
+            if look then UpdateLookPreview(look.items, look.name) end
         end
     end)
 end
@@ -1240,7 +1898,7 @@ do
     scrollFrame:SetPoint("BOTTOMRIGHT", -28, 4)
     
     local morphTab = CreateFrame("Frame", "$parentContent", scrollFrame)
-    morphTab:SetSize(actualMorphTab:GetWidth() - 30, 800) -- 800 is enough height for everything
+    morphTab:SetSize(actualMorphTab:GetWidth() - 30, 1100) -- extra height for all morph sections
     scrollFrame:SetScrollChild(morphTab)
 
     -- Update size dynamically just in case
@@ -1253,12 +1911,12 @@ do
     -- Title
     local titleText = morphTab:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     titleText:SetPoint("TOPLEFT", 10, yOff)
-    titleText:SetText("|cff00ff00Character Morph|r")
+    titleText:SetText("|cffF5C842Character Morph|r")
     yOff = yOff - 22
 
     local subtitleText = morphTab:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     subtitleText:SetPoint("TOPLEFT", 10, yOff)
-    subtitleText:SetText("Change your character model. Client-side only.")
+    subtitleText:SetText("|cff998866Change your character model. Client-side only.|r")
     yOff = yOff - 20
 
     -- Race display IDs: [race][gender] = displayId
@@ -1292,7 +1950,7 @@ do
     -- Section: Race Morph
     local raceLabel = morphTab:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     raceLabel:SetPoint("TOPLEFT", 10, yOff)
-    raceLabel:SetText("|cffffd700Race Morph|r")
+    raceLabel:SetText("|cffF5C842Race Morph|r")
     yOff = yOff - 20
 
     local btnWidth = 120
@@ -1314,7 +1972,7 @@ do
             if IsMorpherReady() then
                 SendMorphCommand("MORPH:" .. ids[2])
                 UpdatePreviewModel()
-                SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: Morphed to " .. raceName .. " Male (" .. ids[2] .. ")")
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Morphed to " .. raceName .. " Male (" .. ids[2] .. ")")
             end
             PlaySound("gsTitleOptionOK")
         end)
@@ -1336,7 +1994,7 @@ do
             if IsMorpherReady() then
                 SendMorphCommand("MORPH:" .. ids[3])
                 UpdatePreviewModel()
-                SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: Morphed to " .. raceName .. " Female (" .. ids[3] .. ")")
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Morphed to " .. raceName .. " Female (" .. ids[3] .. ")")
             end
             PlaySound("gsTitleOptionOK")
         end)
@@ -1361,59 +2019,327 @@ do
     sep1:SetPoint("TOPLEFT", 10, yOff)
     sep1:SetPoint("RIGHT", -10, 0)
     sep1:SetHeight(8)
-    sep1:SetVertexColor(0.3, 0.3, 0.3)
+    sep1:SetVertexColor(0.80, 0.65, 0.22)
     yOff = yOff - 14
 
-    -- Section: Custom Display ID
+    -- Section: Custom Display ID (with creature search)
     local customLabel = morphTab:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     customLabel:SetPoint("TOPLEFT", 10, yOff)
-    customLabel:SetText("|cffffd700Custom Display ID|r")
-    yOff = yOff - 20
+    customLabel:SetText("|cffF5C842Custom Display ID|r")
+    yOff = yOff - 18
 
     local customDesc = morphTab:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     customDesc:SetPoint("TOPLEFT", 10, yOff)
-    customDesc:SetText("Enter any creature/NPC display ID to morph into:")
-    yOff = yOff - 20
+    customDesc:SetText("|cff998866Search by creature name or enter a display ID directly:|r")
+    yOff = yOff - 22
 
-    local editBox = CreateFrame("EditBox", "$parentMorphIdInput", morphTab, "InputBoxTemplate")
-    editBox:SetSize(140, 20)
-    editBox:SetPoint("TOPLEFT", 15, yOff)
+    -- Search bar container (modern dark box with golden accent)
+    local searchContainer = CreateFrame("Frame", nil, morphTab)
+    searchContainer:SetSize(370, 28)
+    searchContainer:SetPoint("TOPLEFT", 10, yOff)
+    searchContainer:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    })
+    searchContainer:SetBackdropColor(0.06, 0.05, 0.03, 0.95)
+    searchContainer:SetBackdropBorderColor(0.60, 0.50, 0.18, 0.8)
+
+    local searchIcon = searchContainer:CreateTexture(nil, "OVERLAY")
+    searchIcon:SetSize(14, 14)
+    searchIcon:SetPoint("LEFT", 6, 0)
+    searchIcon:SetTexture("Interface\\Common\\UI-Searchbox-Icon")
+    searchIcon:SetVertexColor(0.80, 0.65, 0.22)
+
+    -- Search/ID input (accepts both text and numbers)
+    local editBox = CreateFrame("EditBox", "$parentMorphIdInput", searchContainer)
+    editBox:SetSize(310, 18)
+    editBox:SetPoint("LEFT", searchIcon, "RIGHT", 4, 0)
     editBox:SetAutoFocus(false)
-    editBox:SetNumeric(true)
-    editBox:SetMaxLetters(6)
-    editBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    editBox:SetScript("OnEnterPressed", function(self)
-        local id = tonumber(self:GetText())
-        if id and id > 0 and IsMorpherReady() then
-            SendMorphCommand("MORPH:" .. id)
-            UpdatePreviewModel()
-            SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: Morphed to display ID " .. id)
-        end
+    editBox:SetNumeric(false)
+    editBox:SetMaxLetters(40)
+    editBox:SetFont("Fonts\\FRIZQT__.TTF", 11)
+    editBox:SetTextColor(0.95, 0.88, 0.65)
+
+    local editHint = editBox:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    editHint:SetPoint("LEFT", 2, 0)
+    editHint:SetText("Name or display ID...")
+
+    -- Clear button
+    local editClear = CreateFrame("Button", nil, searchContainer)
+    editClear:SetSize(14, 14)
+    editClear:SetPoint("RIGHT", -4, 0)
+    editClear:SetNormalTexture("Interface\\FriendsFrame\\ClearBroadcastIcon")
+    editClear:SetAlpha(0.5)
+    editClear:Hide()
+    editClear:SetScript("OnEnter", function(self) self:SetAlpha(1) end)
+    editClear:SetScript("OnLeave", function(self) self:SetAlpha(0.5) end)
+
+    -- Selected display from search results
+    local selectedSearchID = nil
+    local selectedSearchName = nil
+
+    -- Search results dropdown (created BEFORE handlers that reference it)
+    local searchDropBg = CreateFrame("Frame", "$parentMorphSearchDrop", actualMorphTab)
+    searchDropBg:SetPoint("TOPLEFT", searchContainer, "BOTTOMLEFT", 0, 2)
+    searchDropBg:SetSize(370, 1)
+    searchDropBg:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 2, right = 2, top = 2, bottom = 2 }
+    })
+    searchDropBg:SetBackdropColor(0.06, 0.05, 0.03, 0.97)
+    searchDropBg:SetBackdropBorderColor(0.80, 0.65, 0.22, 0.9)
+    searchDropBg:SetFrameStrata("DIALOG")
+    searchDropBg:Hide()
+
+    -- Now set up handlers that use searchDropBg
+    editBox:SetScript("OnEscapePressed", function(self)
+        searchDropBg:Hide()
         self:ClearFocus()
+    end)
+    editBox:SetScript("OnEditFocusGained", function() editHint:Hide() end)
+    editBox:SetScript("OnEditFocusLost", function(self)
+        if self:GetText() == "" then editHint:Show(); editClear:Hide() end
+        local hideTimer = CreateFrame("Frame")
+        hideTimer.elapsed = 0
+        hideTimer:SetScript("OnUpdate", function(f, dt)
+            f.elapsed = f.elapsed + dt
+            if f.elapsed >= 0.2 then
+                f:Hide()
+                f:SetScript("OnUpdate", nil)
+                if not editBox:HasFocus() then searchDropBg:Hide() end
+            end
+        end)
+    end)
+    editClear:SetScript("OnClick", function()
+        editBox:SetText("")
+        editBox:ClearFocus()
+        editHint:Show()
+        editClear:Hide()
+        searchDropBg:Hide()
+        selectedSearchID = nil
+        selectedSearchName = nil
     end)
 
     local btnApplyCustom = CreateFrame("Button", "$parentBtnApplyCustom", morphTab, "UIPanelButtonTemplate2")
     btnApplyCustom:SetSize(90, 22)
-    btnApplyCustom:SetPoint("LEFT", editBox, "RIGHT", 10, 0)
-    btnApplyCustom:SetText("|cff00ff00Apply|r")
-    btnApplyCustom:SetScript("OnClick", function()
-        local id = tonumber(editBox:GetText())
-        if id and id > 0 and IsMorpherReady() then
-            SendMorphCommand("MORPH:" .. id)
-            UpdatePreviewModel()
-            SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: Morphed to display ID " .. id)
-            PlaySound("gsTitleOptionOK")
-        else
-            SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: Enter a valid display ID.")
+    btnApplyCustom:SetPoint("LEFT", searchContainer, "RIGHT", 8, 0)
+    btnApplyCustom:SetText("|cffF5C842Apply|r")
+
+    local searchDropScroll = CreateFrame("ScrollFrame", "$parentMorphSearchDropScroll", searchDropBg, "UIPanelScrollFrameTemplate")
+    searchDropScroll:SetPoint("TOPLEFT", 4, -4)
+    searchDropScroll:SetPoint("BOTTOMRIGHT", -22, 4)
+
+    local searchDropContent = CreateFrame("Frame", "$parentMorphSearchDropContent", searchDropScroll)
+    searchDropContent:SetSize(searchDropScroll:GetWidth(), 1)
+    searchDropScroll:SetScrollChild(searchDropContent)
+
+    local SEARCH_ROW_H = 20
+    local MAX_SEARCH_ROWS = 10
+    local searchResultButtons = {}
+
+    -- Pre-build sorted creature list for morph search (reuse combat pet one if exists, else build own)
+    local morphCreatureSorted = nil
+    local function GetMorphCreatureSorted()
+        if morphCreatureSorted then return morphCreatureSorted end
+        morphCreatureSorted = {}
+        local db = ns.creatureDisplayDB
+        if not db then return morphCreatureSorted end
+        for did, name in pairs(db) do
+            table.insert(morphCreatureSorted, { did = did, name = name, nameLower = name:lower() })
+        end
+        table.sort(morphCreatureSorted, function(a, b) return a.name < b.name end)
+        return morphCreatureSorted
+    end
+
+    local function ShowSearchResults(query)
+        -- Clear old
+        for _, b in ipairs(searchResultButtons) do b:Hide() end
+        searchResultButtons = {}
+        selectedSearchID = nil
+        selectedSearchName = nil
+
+        if not query or #query < 2 then
+            searchDropBg:Hide()
+            return
+        end
+
+        local q = query:lower()
+        local results = {}
+        local sorted = GetMorphCreatureSorted()
+        local count = 0
+
+        -- Check if it's a pure number (display ID search)
+        local isNumericQuery = tonumber(query) ~= nil
+
+        for _, entry in ipairs(sorted) do
+            local match = false
+            if isNumericQuery then
+                match = tostring(entry.did):find(q, 1, true) ~= nil
+            else
+                match = entry.nameLower:find(q, 1, true) ~= nil
+            end
+            if match then
+                table.insert(results, entry)
+                count = count + 1
+                if count >= MAX_SEARCH_ROWS * 5 then break end -- gather extra for scrolling
+            end
+        end
+
+        if #results == 0 then
+            searchDropBg:Hide()
+            return
+        end
+
+        local visibleRows = math.min(#results, MAX_SEARCH_ROWS)
+        local dropH = visibleRows * (SEARCH_ROW_H + 1) + 10
+        searchDropBg:SetHeight(dropH)
+        searchDropBg:Show()
+
+        local bY = 0
+        for idx, entry in ipairs(results) do
+            local row = CreateFrame("Button", nil, searchDropContent)
+            row:SetSize(searchDropContent:GetWidth() - 4, SEARCH_ROW_H)
+            row:SetPoint("TOPLEFT", 2, -bY)
+
+            local rowBg = row:CreateTexture(nil, "BACKGROUND")
+            rowBg:SetAllPoints()
+            if idx % 2 == 0 then
+                rowBg:SetTexture(1, 1, 1, 0.03)
+            else
+                rowBg:SetTexture(0, 0, 0, 0)
+            end
+
+            local nameStr = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            nameStr:SetPoint("LEFT", 6, 0)
+            nameStr:SetText("|cffffd700" .. entry.name .. "|r")
+            nameStr:SetWidth(230)
+            nameStr:SetJustifyH("LEFT")
+
+            local idStr = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            idStr:SetPoint("RIGHT", -6, 0)
+            idStr:SetText("|cff888888" .. entry.did .. "|r")
+
+            row:SetScript("OnClick", function()
+                selectedSearchID = entry.did
+                selectedSearchName = entry.name
+                editBox:SetText(entry.name .. " (" .. entry.did .. ")")
+                editBox:SetCursorPosition(0)
+                searchDropBg:Hide()
+                editBox:ClearFocus()
+            end)
+
+            row:SetScript("OnEnter", function()
+                rowBg:SetTexture(0.6, 0.48, 0.15, 0.25)
+                GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+                GameTooltip:AddLine(entry.name)
+                GameTooltip:AddLine("Display ID: " .. entry.did, 1, 1, 1)
+                GameTooltip:AddLine("Click to select", 0.5, 0.5, 0.5)
+                GameTooltip:Show()
+            end)
+
+            row:SetScript("OnLeave", function()
+                if idx % 2 == 0 then
+                    rowBg:SetTexture(1, 1, 1, 0.03)
+                else
+                    rowBg:SetTexture(0, 0, 0, 0)
+                end
+                GameTooltip:Hide()
+            end)
+
+            table.insert(searchResultButtons, row)
+            bY = bY + SEARCH_ROW_H + 1
+        end
+
+        searchDropContent:SetHeight(math.max(1, bY))
+    end
+
+    -- Search debounce timer
+    local morphSearchTimer = CreateFrame("Frame")
+    morphSearchTimer:Hide()
+    morphSearchTimer.elapsed = 0
+    morphSearchTimer:SetScript("OnUpdate", function(self, dt)
+        self.elapsed = self.elapsed + dt
+        if self.elapsed >= 0.3 then
+            self:Hide()
+            local text = editBox:GetText()
+            -- Don't search if user selected a result (text contains " (ID)")
+            if text:find("%(", 1, true) then return end
+            ShowSearchResults(text)
         end
     end)
+
+    editBox:SetScript("OnTextChanged", function(self, userInput)
+        if userInput then
+            selectedSearchID = nil
+            selectedSearchName = nil
+            morphSearchTimer.elapsed = 0
+            morphSearchTimer:Show()
+            if self:GetText() ~= "" then editClear:Show() else editClear:Hide() end
+        end
+    end)
+
+    editBox:SetScript("OnEnterPressed", function(self)
+        -- If a search result was selected, apply it
+        if selectedSearchID then
+            if IsMorpherReady() then
+                SendMorphCommand("MORPH:" .. selectedSearchID)
+                UpdatePreviewModel()
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Morphed to " .. (selectedSearchName or "creature") .. " (" .. selectedSearchID .. ")")
+            end
+        else
+            -- Try as numeric ID
+            local text = self:GetText()
+            -- Extract number from text like "Name (12345)"
+            local id = tonumber(text:match("%((%d+)%)")) or tonumber(text)
+            if id and id > 0 and IsMorpherReady() then
+                SendMorphCommand("MORPH:" .. id)
+                UpdatePreviewModel()
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Morphed to display ID " .. id)
+            end
+        end
+        searchDropBg:Hide()
+        self:ClearFocus()
+    end)
+
+    -- Apply button
+    btnApplyCustom:SetScript("OnClick", function()
+        if selectedSearchID then
+            if IsMorpherReady() then
+                SendMorphCommand("MORPH:" .. selectedSearchID)
+                UpdatePreviewModel()
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Morphed to " .. (selectedSearchName or "creature") .. " (" .. selectedSearchID .. ")")
+                PlaySound("gsTitleOptionOK")
+            else
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: |cffff0000DLL not loaded!|r")
+            end
+        else
+            local text = editBox:GetText()
+            local id = tonumber(text:match("%((%d+)%)")) or tonumber(text)
+            if id and id > 0 and IsMorpherReady() then
+                SendMorphCommand("MORPH:" .. id)
+                UpdatePreviewModel()
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Morphed to display ID " .. id)
+                PlaySound("gsTitleOptionOK")
+            else
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Search for a creature or enter a valid display ID.")
+            end
+        end
+        searchDropBg:Hide()
+    end)
+
+    -- Close dropdown when clicking elsewhere
+    hooksecurefunc("CloseDropDownMenus", function() searchDropBg:Hide() end)
 
     yOff = yOff - 30
 
     -- Size (Scale) section
     local sizeLabel = morphTab:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     sizeLabel:SetPoint("TOPLEFT", 10, yOff)
-    sizeLabel:SetText("|cffffd700Character Size|r")
+    sizeLabel:SetText("|cffF5C842Character Size|r")
     yOff = yOff - 20
 
     local sizeEditBox = CreateFrame("EditBox", "$parentMorphSizeInput", morphTab, "InputBoxTemplate")
@@ -1428,19 +2354,234 @@ do
     local btnApplySize = CreateFrame("Button", "$parentBtnApplySize", morphTab, "UIPanelButtonTemplate2")
     btnApplySize:SetSize(90, 22)
     btnApplySize:SetPoint("LEFT", sizeEditBox, "RIGHT", 10, 0)
-    btnApplySize:SetText("|cff00ff00Apply Size|r")
+    btnApplySize:SetText("|cffF5C842Apply Size|r")
     btnApplySize:SetScript("OnClick", function()
         local scale = tonumber(sizeEditBox:GetText())
         if scale and scale > 0.1 and scale < 10.0 and IsMorpherReady() then
             SendMorphCommand("SCALE:" .. scale)
-            SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: Scaled character to " .. scale)
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Scaled character to " .. scale)
             PlaySound("gsTitleOptionOK")
         else
-            SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: Enter a valid scale (0.1 to 10.0).")
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Enter a valid scale (0.1 to 10.0).")
         end
     end)
     
     yOff = yOff - 40
+
+    -- ============================================================
+    -- Saved Morph Favorites
+    -- ============================================================
+    local favSep = morphTab:CreateTexture(nil, "ARTWORK")
+    favSep:SetTexture("Interface\\Tooltips\\UI-Tooltip-Border")
+    favSep:SetTexCoord(0.81, 0.94, 0.5, 1)
+    favSep:SetPoint("TOPLEFT", 10, yOff)
+    favSep:SetPoint("RIGHT", -10, 0)
+    favSep:SetHeight(8)
+    favSep:SetVertexColor(0.80, 0.65, 0.22)
+    yOff = yOff - 14
+
+    local favLabel = morphTab:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    favLabel:SetPoint("TOPLEFT", 10, yOff)
+    favLabel:SetText("|cffF5C842Saved Morphs|r")
+    yOff = yOff - 18
+
+    local favDesc = morphTab:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    favDesc:SetPoint("TOPLEFT", 10, yOff)
+    favDesc:SetText("|cff998866Save display IDs with a name for quick access. Use the search above to find IDs.|r")
+    yOff = yOff - 18
+
+    -- Save controls: [Name input] [ID input] [Save button]
+    local favNameInput = CreateFrame("EditBox", "$parentFavNameInput", morphTab, "InputBoxTemplate")
+    favNameInput:SetSize(130, 20)
+    favNameInput:SetPoint("TOPLEFT", 15, yOff)
+    favNameInput:SetAutoFocus(false)
+    favNameInput:SetMaxLetters(24)
+    favNameInput:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
+    local favNameHint = favNameInput:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    favNameHint:SetPoint("LEFT", 4, 0)
+    favNameHint:SetText("Name")
+    favNameInput:SetScript("OnEditFocusGained", function() favNameHint:Hide() end)
+    favNameInput:SetScript("OnEditFocusLost", function(self)
+        if self:GetText() == "" then favNameHint:Show() end
+    end)
+
+    local favIdInput = CreateFrame("EditBox", "$parentFavIdInput", morphTab, "InputBoxTemplate")
+    favIdInput:SetSize(70, 20)
+    favIdInput:SetPoint("LEFT", favNameInput, "RIGHT", 8, 0)
+    favIdInput:SetAutoFocus(false)
+    favIdInput:SetNumeric(true)
+    favIdInput:SetMaxLetters(6)
+    favIdInput:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
+    local favIdHint = favIdInput:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    favIdHint:SetPoint("LEFT", 4, 0)
+    favIdHint:SetText("ID")
+    favIdInput:SetScript("OnEditFocusGained", function() favIdHint:Hide() end)
+    favIdInput:SetScript("OnEditFocusLost", function(self)
+        if self:GetText() == "" then favIdHint:Show() end
+    end)
+
+    local btnFavSave = CreateFrame("Button", "$parentBtnFavSave", morphTab, "UIPanelButtonTemplate2")
+    btnFavSave:SetSize(60, 20)
+    btnFavSave:SetPoint("LEFT", favIdInput, "RIGHT", 8, 0)
+    btnFavSave:SetText("|cffF5C842Save|r")
+
+    local btnFavRemove = CreateFrame("Button", "$parentBtnFavRemove", morphTab, "UIPanelButtonTemplate2")
+    btnFavRemove:SetSize(70, 20)
+    btnFavRemove:SetPoint("LEFT", btnFavSave, "RIGHT", 4, 0)
+    btnFavRemove:SetText("Remove")
+    btnFavRemove:Disable()
+
+    yOff = yOff - 26
+
+    -- Favorites list area (scrollable)
+    local favListBg = CreateFrame("Frame", "$parentFavListBg", morphTab)
+    favListBg:SetPoint("TOPLEFT", 10, yOff)
+    favListBg:SetSize(480, 100)
+    favListBg:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 2, right = 2, top = 2, bottom = 2 }
+    })
+    favListBg:SetBackdropColor(0.04, 0.03, 0.03, 0.9)
+    favListBg:SetBackdropBorderColor(0.80, 0.65, 0.22, 0.85)
+
+    local favScroll = CreateFrame("ScrollFrame", "$parentFavScroll", favListBg, "UIPanelScrollFrameTemplate")
+    favScroll:SetPoint("TOPLEFT", 4, -4)
+    favScroll:SetPoint("BOTTOMRIGHT", -22, 4)
+
+    local favContent = CreateFrame("Frame", "$parentFavContent", favScroll)
+    favContent:SetSize(favScroll:GetWidth(), 1)
+    favScroll:SetScrollChild(favContent)
+
+    local favButtons = {}
+    local favSelectedIdx = nil
+
+    local function BuildFavButtons()
+        -- Clear old buttons
+        for _, b in ipairs(favButtons) do b:Hide() end
+        favButtons = {}
+        favSelectedIdx = nil
+        btnFavRemove:Disable()
+
+        if not _G["TransmorpherMorphFavorites"] then _G["TransmorpherMorphFavorites"] = {} end
+        local favs = _G["TransmorpherMorphFavorites"]
+
+        local bY = 0
+        for idx, fav in ipairs(favs) do
+            local row = CreateFrame("Button", nil, favContent)
+            row:SetSize(favContent:GetWidth() - 4, 20)
+            row:SetPoint("TOPLEFT", 2, -bY)
+
+            local rowBg = row:CreateTexture(nil, "BACKGROUND")
+            rowBg:SetAllPoints()
+            rowBg:SetTexture(0, 0, 0, 0)
+
+            local nameStr = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            nameStr:SetPoint("LEFT", 4, 0)
+            nameStr:SetText("|cffffd700" .. fav.name .. "|r")
+            nameStr:SetWidth(200)
+            nameStr:SetJustifyH("LEFT")
+
+            local idStr = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            idStr:SetPoint("LEFT", nameStr, "RIGHT", 8, 0)
+            idStr:SetText("|cff8a7d6aID: " .. fav.id .. "|r")
+
+            local useBtn = CreateFrame("Button", "TransmorpherFavUseBtn"..idx, row, "UIPanelButtonTemplate2")
+            useBtn:SetSize(50, 18)
+            useBtn:SetPoint("RIGHT", -2, 0)
+            useBtn:SetText("|cffF5C842Use|r")
+            useBtn:SetScript("OnClick", function()
+                if IsMorpherReady() then
+                    SendMorphCommand("MORPH:" .. fav.id)
+                    UpdatePreviewModel()
+                    SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Morphed to " .. fav.name .. " (" .. fav.id .. ")")
+                end
+                PlaySound("gsTitleOptionOK")
+            end)
+
+            -- Selection highlight
+            row:SetScript("OnClick", function()
+                -- Deselect previous
+                if favSelectedIdx and favButtons[favSelectedIdx] then
+                    favButtons[favSelectedIdx].bg:SetTexture(0, 0, 0, 0)
+                end
+                favSelectedIdx = idx
+                rowBg:SetTexture(0.6, 0.48, 0.15, 0.3)
+                btnFavRemove:Enable()
+            end)
+            row:SetScript("OnEnter", function()
+                if favSelectedIdx ~= idx then rowBg:SetTexture(1, 1, 1, 0.05) end
+                GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+                GameTooltip:AddLine(fav.name)
+                GameTooltip:AddLine("Display ID: " .. fav.id, 1, 1, 1)
+                GameTooltip:AddLine("Click to select, Use to morph", 0.5, 0.5, 0.5)
+                GameTooltip:Show()
+            end)
+            row:SetScript("OnLeave", function()
+                if favSelectedIdx ~= idx then rowBg:SetTexture(0, 0, 0, 0) end
+                GameTooltip:Hide()
+            end)
+
+            row.bg = rowBg
+            table.insert(favButtons, row)
+            bY = bY + 21
+        end
+
+        favContent:SetHeight(math.max(1, bY))
+    end
+
+    -- Save favorite
+    btnFavSave:SetScript("OnClick", function()
+        local name = favNameInput:GetText()
+        local id = tonumber(favIdInput:GetText())
+        if not name or name == "" then
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Enter a name for the morph.")
+            return
+        end
+        if not id or id <= 0 then
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Enter a valid display ID.")
+            return
+        end
+        if not _G["TransmorpherMorphFavorites"] then _G["TransmorpherMorphFavorites"] = {} end
+        table.insert(_G["TransmorpherMorphFavorites"], { name = name, id = id })
+        favNameInput:SetText("") favIdInput:SetText("")
+        favNameHint:Show() favIdHint:Show()
+        favNameInput:ClearFocus() favIdInput:ClearFocus()
+        BuildFavButtons()
+        SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Saved morph '" .. name .. "' (ID: " .. id .. ")")
+        PlaySound("gsTitleOptionOK")
+    end)
+
+    -- Remove favorite
+    btnFavRemove:SetScript("OnClick", function()
+        if favSelectedIdx and _G["TransmorpherMorphFavorites"] then
+            local fav = _G["TransmorpherMorphFavorites"][favSelectedIdx]
+            if fav then
+                table.remove(_G["TransmorpherMorphFavorites"], favSelectedIdx)
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Removed '" .. fav.name .. "'")
+            end
+            BuildFavButtons()
+            PlaySound("gsTitleOptionOK")
+        end
+    end)
+
+    -- Build on first show
+    morphTab:HookScript("OnShow", function() BuildFavButtons() end)
+
+    yOff = yOff - 110
+
+    -- Separator before popular creatures
+    local sep2 = morphTab:CreateTexture(nil, "ARTWORK")
+    sep2:SetTexture("Interface\\Tooltips\\UI-Tooltip-Border")
+    sep2:SetTexCoord(0.81, 0.94, 0.5, 1)
+    sep2:SetPoint("TOPLEFT", 10, yOff)
+    sep2:SetPoint("RIGHT", -10, 0)
+    sep2:SetHeight(8)
+    sep2:SetVertexColor(0.80, 0.65, 0.22)
+    yOff = yOff - 14
 
     -- Current display info
     local infoLabel = morphTab:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -1451,7 +2592,7 @@ do
     -- Popular creature morphs section
     local creaturesLabel = morphTab:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     creaturesLabel:SetPoint("TOPLEFT", 10, yOff)
-    creaturesLabel:SetText("|cffffd700Popular Creatures|r")
+    creaturesLabel:SetText("|cffF5C842Popular Creatures|r")
     yOff = yOff - 20
 
     local popularCreatures = {
@@ -1492,7 +2633,7 @@ do
             if IsMorpherReady() then
                 SendMorphCommand("MORPH:" .. creature.id)
                 UpdatePreviewModel()
-                SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: Morphed to " .. creature.name .. " (" .. creature.id .. ")")
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Morphed to " .. creature.name .. " (" .. creature.id .. ")")
             end
             PlaySound("gsTitleOptionOK")
         end)
@@ -1515,19 +2656,1036 @@ do
     local btnResetMorph = CreateFrame("Button", "$parentBtnResetModel", morphTab, "UIPanelButtonTemplate2")
     btnResetMorph:SetSize(200, 28)
     btnResetMorph:SetPoint("TOPLEFT", 10, yOff)
-    btnResetMorph:SetText("|cffff6666Reset Character Model|r")
+    btnResetMorph:SetText("|cffD4A44EReset Character Model|r")
     btnResetMorph:SetScript("OnClick", function()
         if IsMorpherReady() then
             SendMorphCommand("RESET:ALL")
             mainFrame.dressingRoom:SetUnit("player")
-            SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: Character model reset!")
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Character model reset!")
         end
         PlaySound("gsTitleOptionOK")
     end)
 
     -- Update display info on show
     morphTab:SetScript("OnShow", function()
-        infoLabel:SetText("|cff888888Display info not available in stealth mode.|r")
+        infoLabel:SetText("|cff8a7d6aDisplay info not available in stealth mode.|r")
+    end)
+end
+
+---------------- MOUNTS TAB ----------------
+
+do
+    local mountTab = mainFrame.tabs.mounts
+    local ROW_HEIGHT = 32
+
+    -- Search bar container
+    local searchContainer = CreateFrame("Frame", nil, mountTab)
+    searchContainer:SetPoint("TOPLEFT", 6, -6)
+    searchContainer:SetPoint("RIGHT", -6, 0)
+    searchContainer:SetHeight(26)
+    searchContainer:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    })
+    searchContainer:SetBackdropColor(0.06, 0.05, 0.03, 0.95)
+    searchContainer:SetBackdropBorderColor(0.60, 0.50, 0.18, 0.8)
+
+    local searchIcon = searchContainer:CreateTexture(nil, "OVERLAY")
+    searchIcon:SetSize(14, 14)
+    searchIcon:SetPoint("LEFT", 6, 0)
+    searchIcon:SetTexture("Interface\\Common\\UI-Searchbox-Icon")
+    searchIcon:SetVertexColor(0.80, 0.65, 0.22)
+
+    local searchBox = CreateFrame("EditBox", "$parentMountSearch", searchContainer)
+    searchBox:SetSize(480, 18)
+    searchBox:SetPoint("LEFT", searchIcon, "RIGHT", 4, 0)
+    searchBox:SetPoint("RIGHT", -24, 0)
+    searchBox:SetAutoFocus(false)
+    searchBox:SetMaxLetters(40)
+    searchBox:SetFont("Fonts\\FRIZQT__.TTF", 11)
+    searchBox:SetTextColor(0.95, 0.88, 0.65)
+    searchBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
+    local searchHint = searchBox:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    searchHint:SetPoint("LEFT", 2, 0)
+    searchHint:SetText("Search mounts...")
+    searchBox:SetScript("OnEditFocusGained", function() searchHint:Hide() end)
+    searchBox:SetScript("OnEditFocusLost", function(self)
+        if self:GetText() == "" then searchHint:Show() end
+    end)
+
+    local searchClear = CreateFrame("Button", nil, searchContainer)
+    searchClear:SetSize(14, 14)
+    searchClear:SetPoint("RIGHT", -4, 0)
+    searchClear:SetNormalTexture("Interface\\FriendsFrame\\ClearBroadcastIcon")
+    searchClear:SetAlpha(0.5)
+    searchClear:Hide()
+    searchClear:SetScript("OnEnter", function(self) self:SetAlpha(1) end)
+    searchClear:SetScript("OnLeave", function(self) self:SetAlpha(0.5) end)
+    searchClear:SetScript("OnClick", function()
+        searchBox:SetText("")
+        searchBox:ClearFocus()
+        searchHint:Show()
+        searchClear:Hide()
+    end)
+
+    -- List background (full width)
+    local listBg = CreateFrame("Frame", "$parentMountListBg", mountTab)
+    listBg:SetPoint("TOPLEFT", 6, -32)
+    listBg:SetPoint("BOTTOMRIGHT", -6, 38)
+    listBg:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 2, right = 2, top = 2, bottom = 2 }
+    })
+    listBg:SetBackdropColor(0.04, 0.03, 0.03, 0.9)
+    listBg:SetBackdropBorderColor(0.80, 0.65, 0.22, 0.85)
+
+    local listScroll = CreateFrame("ScrollFrame", "$parentMountListScroll", listBg, "UIPanelScrollFrameTemplate")
+    listScroll:SetPoint("TOPLEFT", 4, -4)
+    listScroll:SetPoint("BOTTOMRIGHT", -22, 4)
+
+    local listContent = CreateFrame("Frame", "$parentMountListContent", listScroll)
+    listContent:SetSize(listScroll:GetWidth(), 1)
+    listScroll:SetScrollChild(listContent)
+
+    -- Bottom buttons
+    local btnApplyMount = CreateFrame("Button", "$parentBtnApplyMount", mountTab, "UIPanelButtonTemplate2")
+    btnApplyMount:SetSize(140, 26)
+    btnApplyMount:SetPoint("BOTTOMLEFT", 10, 4)
+    btnApplyMount:SetText("|cffF5C842Apply Mount Morph|r")
+    btnApplyMount:Disable()
+
+    local btnResetMount = CreateFrame("Button", "$parentBtnResetMount", mountTab, "UIPanelButtonTemplate2")
+    btnResetMount:SetSize(120, 26)
+    btnResetMount:SetPoint("LEFT", btnApplyMount, "RIGHT", 8, 0)
+    btnResetMount:SetText("|cffD4A44EReset Mount|r")
+
+    -- State
+    local mountButtons = {}
+    local mountSelectedIdx = nil
+    local mountFilteredList = {}
+
+    local function FilterMounts(query)
+        mountFilteredList = {}
+        local db = ns.mountsDB or {}
+        if not query or query == "" then
+            for i, entry in ipairs(db) do
+                table.insert(mountFilteredList, { idx = i, name = entry[1], spellID = entry[2], displayID = entry[3], modelPath = entry[4] })
+            end
+        else
+            local q = query:lower()
+            for i, entry in ipairs(db) do
+                if entry[1]:lower():find(q, 1, true) then
+                    table.insert(mountFilteredList, { idx = i, name = entry[1], spellID = entry[2], displayID = entry[3], modelPath = entry[4] })
+                end
+            end
+        end
+        return mountFilteredList
+    end
+
+    local function BuildMountList()
+        for _, b in ipairs(mountButtons) do b:Hide() end
+        mountButtons = {}
+        mountSelectedIdx = nil
+        btnApplyMount:Disable()
+
+        local bY = 0
+        for idx, entry in ipairs(mountFilteredList) do
+            local row = CreateFrame("Button", nil, listContent)
+            row:SetSize(listContent:GetWidth() - 4, ROW_HEIGHT)
+            row:SetPoint("TOPLEFT", 2, -bY)
+
+            local rowBg = row:CreateTexture(nil, "BACKGROUND")
+            rowBg:SetAllPoints()
+            rowBg:SetTexture(0, 0, 0, 0)
+
+            -- Icon
+            local icon = row:CreateTexture(nil, "ARTWORK")
+            icon:SetSize(ROW_HEIGHT - 4, ROW_HEIGHT - 4)
+            icon:SetPoint("LEFT", 4, 0)
+            icon:SetTexture(GetSpellIcon(entry.spellID))
+            icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+            -- Icon border
+            local iconBorder = row:CreateTexture(nil, "OVERLAY")
+            iconBorder:SetSize(ROW_HEIGHT - 2, ROW_HEIGHT - 2)
+            iconBorder:SetPoint("CENTER", icon, "CENTER", 0, 0)
+            iconBorder:SetTexture("Interface\\Buttons\\UI-Quickslot2")
+            iconBorder:SetTexCoord(0.2, 0.8, 0.2, 0.8)
+
+            -- Name
+            local nameStr = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            nameStr:SetPoint("LEFT", icon, "RIGHT", 8, 0)
+            nameStr:SetText("|cffffd700" .. entry.name .. "|r")
+            nameStr:SetJustifyH("LEFT")
+
+            -- Display ID on the right
+            local idStr = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            idStr:SetPoint("RIGHT", -8, 0)
+            idStr:SetText("|cff6a6050" .. entry.displayID .. "|r")
+
+            row:SetScript("OnClick", function()
+                if mountSelectedIdx and mountButtons[mountSelectedIdx] then
+                    mountButtons[mountSelectedIdx].bg:SetTexture(0, 0, 0, 0)
+                end
+                mountSelectedIdx = idx
+                rowBg:SetTexture(0.6, 0.48, 0.15, 0.3)
+                btnApplyMount:Enable()
+            end)
+
+            row:SetScript("OnEnter", function()
+                if mountSelectedIdx ~= idx then rowBg:SetTexture(1, 1, 1, 0.05) end
+                GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+                GameTooltip:AddLine(entry.name)
+                GameTooltip:AddLine("Display ID: " .. entry.displayID, 1, 1, 1)
+                if entry.spellID > 0 then
+                    GameTooltip:AddLine("Spell ID: " .. entry.spellID, 0.7, 0.7, 0.7)
+                end
+                GameTooltip:AddLine("Click to select, then Apply", 0.5, 0.5, 0.5)
+                GameTooltip:Show()
+            end)
+
+            row:SetScript("OnLeave", function()
+                if mountSelectedIdx ~= idx then rowBg:SetTexture(0, 0, 0, 0) end
+                GameTooltip:Hide()
+            end)
+
+            row.bg = rowBg
+            table.insert(mountButtons, row)
+            bY = bY + ROW_HEIGHT + 1
+        end
+
+        listContent:SetHeight(math.max(1, bY))
+    end
+
+    -- Search debounce
+    local mountSearchTimer = CreateFrame("Frame")
+    mountSearchTimer:Hide()
+    mountSearchTimer.elapsed = 0
+    mountSearchTimer:SetScript("OnUpdate", function(self, dt)
+        self.elapsed = self.elapsed + dt
+        if self.elapsed >= 0.3 then
+            self:Hide()
+            FilterMounts(searchBox:GetText())
+            BuildMountList()
+        end
+    end)
+    searchBox:SetScript("OnTextChanged", function(self)
+        mountSearchTimer.elapsed = 0
+        mountSearchTimer:Show()
+        if self:GetText() ~= "" then searchClear:Show() else searchClear:Hide() end
+    end)
+
+    -- Apply mount morph
+    btnApplyMount:SetScript("OnClick", function()
+        if mountSelectedIdx and mountFilteredList[mountSelectedIdx] then
+            local entry = mountFilteredList[mountSelectedIdx]
+            if IsMorpherReady() then
+                SendMorphCommand("MOUNT_MORPH:" .. entry.displayID)
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Mount morphed to " .. entry.name .. " (" .. entry.displayID .. ")")
+            else
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: |cffff0000DLL not loaded!|r")
+            end
+            PlaySound("gsTitleOptionOK")
+        end
+    end)
+
+    -- Reset mount morph
+    btnResetMount:SetScript("OnClick", function()
+        if IsMorpherReady() then
+            SendMorphCommand("MOUNT_RESET")
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Mount appearance reset!")
+        end
+        PlaySound("gsTitleOptionOK")
+    end)
+
+    -- Initialize on show
+    mountTab:SetScript("OnShow", function()
+        if #mountFilteredList == 0 then
+            FilterMounts("")
+            BuildMountList()
+        end
+    end)
+end
+
+---------------- PETS TAB ----------------
+
+do
+    local petTab = mainFrame.tabs.pets
+    local ROW_HEIGHT = 32
+
+    -- Search bar container
+    local searchContainer = CreateFrame("Frame", nil, petTab)
+    searchContainer:SetPoint("TOPLEFT", 6, -6)
+    searchContainer:SetPoint("RIGHT", -6, 0)
+    searchContainer:SetHeight(26)
+    searchContainer:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    })
+    searchContainer:SetBackdropColor(0.06, 0.05, 0.03, 0.95)
+    searchContainer:SetBackdropBorderColor(0.60, 0.50, 0.18, 0.8)
+
+    local searchIcon = searchContainer:CreateTexture(nil, "OVERLAY")
+    searchIcon:SetSize(14, 14)
+    searchIcon:SetPoint("LEFT", 6, 0)
+    searchIcon:SetTexture("Interface\\Common\\UI-Searchbox-Icon")
+    searchIcon:SetVertexColor(0.80, 0.65, 0.22)
+
+    local searchBox = CreateFrame("EditBox", "$parentPetSearch", searchContainer)
+    searchBox:SetSize(480, 18)
+    searchBox:SetPoint("LEFT", searchIcon, "RIGHT", 4, 0)
+    searchBox:SetPoint("RIGHT", -24, 0)
+    searchBox:SetAutoFocus(false)
+    searchBox:SetMaxLetters(40)
+    searchBox:SetFont("Fonts\\FRIZQT__.TTF", 11)
+    searchBox:SetTextColor(0.95, 0.88, 0.65)
+    searchBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
+    local searchHint = searchBox:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    searchHint:SetPoint("LEFT", 2, 0)
+    searchHint:SetText("Search pets...")
+    searchBox:SetScript("OnEditFocusGained", function() searchHint:Hide() end)
+    searchBox:SetScript("OnEditFocusLost", function(self)
+        if self:GetText() == "" then searchHint:Show() end
+    end)
+
+    local searchClear = CreateFrame("Button", nil, searchContainer)
+    searchClear:SetSize(14, 14)
+    searchClear:SetPoint("RIGHT", -4, 0)
+    searchClear:SetNormalTexture("Interface\\FriendsFrame\\ClearBroadcastIcon")
+    searchClear:SetAlpha(0.5)
+    searchClear:Hide()
+    searchClear:SetScript("OnEnter", function(self) self:SetAlpha(1) end)
+    searchClear:SetScript("OnLeave", function(self) self:SetAlpha(0.5) end)
+    searchClear:SetScript("OnClick", function()
+        searchBox:SetText("")
+        searchBox:ClearFocus()
+        searchHint:Show()
+        searchClear:Hide()
+    end)
+
+    -- List background (full width)
+    local listBg = CreateFrame("Frame", "$parentPetListBg", petTab)
+    listBg:SetPoint("TOPLEFT", 6, -32)
+    listBg:SetPoint("BOTTOMRIGHT", -6, 38)
+    listBg:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 2, right = 2, top = 2, bottom = 2 }
+    })
+    listBg:SetBackdropColor(0.04, 0.03, 0.03, 0.9)
+    listBg:SetBackdropBorderColor(0.80, 0.65, 0.22, 0.85)
+
+    local listScroll = CreateFrame("ScrollFrame", "$parentPetListScroll", listBg, "UIPanelScrollFrameTemplate")
+    listScroll:SetPoint("TOPLEFT", 4, -4)
+    listScroll:SetPoint("BOTTOMRIGHT", -22, 4)
+
+    local listContent = CreateFrame("Frame", "$parentPetListContent", listScroll)
+    listContent:SetSize(listScroll:GetWidth(), 1)
+    listScroll:SetScrollChild(listContent)
+
+    -- Bottom buttons
+    local btnApplyPet = CreateFrame("Button", "$parentBtnApplyPet", petTab, "UIPanelButtonTemplate2")
+    btnApplyPet:SetSize(130, 26)
+    btnApplyPet:SetPoint("BOTTOMLEFT", 10, 4)
+    btnApplyPet:SetText("|cffF5C842Apply Pet Morph|r")
+    btnApplyPet:Disable()
+
+    local btnResetPet = CreateFrame("Button", "$parentBtnResetPet", petTab, "UIPanelButtonTemplate2")
+    btnResetPet:SetSize(110, 26)
+    btnResetPet:SetPoint("LEFT", btnApplyPet, "RIGHT", 8, 0)
+    btnResetPet:SetText("|cffD4A44EReset Pet|r")
+
+    -- State
+    local petButtons = {}
+    local petSelectedIdx = nil
+    local petFilteredList = {}
+
+    local function FilterPets(query)
+        petFilteredList = {}
+        local db = ns.petsDB or {}
+        if not query or query == "" then
+            for i, entry in ipairs(db) do
+                table.insert(petFilteredList, { idx = i, name = entry[1], spellID = entry[2], displayID = entry[3], modelPath = entry[4] })
+            end
+        else
+            local q = query:lower()
+            for i, entry in ipairs(db) do
+                if entry[1]:lower():find(q, 1, true) then
+                    table.insert(petFilteredList, { idx = i, name = entry[1], spellID = entry[2], displayID = entry[3], modelPath = entry[4] })
+                end
+            end
+        end
+        return petFilteredList
+    end
+
+    local function BuildPetList()
+        for _, b in ipairs(petButtons) do b:Hide() end
+        petButtons = {}
+        petSelectedIdx = nil
+        btnApplyPet:Disable()
+
+        local bY = 0
+        for idx, entry in ipairs(petFilteredList) do
+            local row = CreateFrame("Button", nil, listContent)
+            row:SetSize(listContent:GetWidth() - 4, ROW_HEIGHT)
+            row:SetPoint("TOPLEFT", 2, -bY)
+
+            local rowBg = row:CreateTexture(nil, "BACKGROUND")
+            rowBg:SetAllPoints()
+            rowBg:SetTexture(0, 0, 0, 0)
+
+            -- Icon
+            local icon = row:CreateTexture(nil, "ARTWORK")
+            icon:SetSize(ROW_HEIGHT - 4, ROW_HEIGHT - 4)
+            icon:SetPoint("LEFT", 4, 0)
+            icon:SetTexture(GetSpellIcon(entry.spellID))
+            icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+            -- Icon border
+            local iconBorder = row:CreateTexture(nil, "OVERLAY")
+            iconBorder:SetSize(ROW_HEIGHT - 2, ROW_HEIGHT - 2)
+            iconBorder:SetPoint("CENTER", icon, "CENTER", 0, 0)
+            iconBorder:SetTexture("Interface\\Buttons\\UI-Quickslot2")
+            iconBorder:SetTexCoord(0.2, 0.8, 0.2, 0.8)
+
+            -- Name
+            local nameStr = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            nameStr:SetPoint("LEFT", icon, "RIGHT", 8, 0)
+            nameStr:SetText("|cffffd700" .. entry.name .. "|r")
+            nameStr:SetJustifyH("LEFT")
+
+            -- Display ID on the right
+            local idStr = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            idStr:SetPoint("RIGHT", -8, 0)
+            idStr:SetText("|cff6a6050" .. entry.displayID .. "|r")
+
+            row:SetScript("OnClick", function()
+                if petSelectedIdx and petButtons[petSelectedIdx] then
+                    petButtons[petSelectedIdx].bg:SetTexture(0, 0, 0, 0)
+                end
+                petSelectedIdx = idx
+                rowBg:SetTexture(0.6, 0.48, 0.15, 0.3)
+                btnApplyPet:Enable()
+            end)
+
+            row:SetScript("OnEnter", function()
+                if petSelectedIdx ~= idx then rowBg:SetTexture(1, 1, 1, 0.05) end
+                GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+                GameTooltip:AddLine(entry.name)
+                GameTooltip:AddLine("Display ID: " .. entry.displayID, 1, 1, 1)
+                if entry.spellID > 0 then
+                    GameTooltip:AddLine("Spell ID: " .. entry.spellID, 0.7, 0.7, 0.7)
+                end
+                GameTooltip:AddLine("Click to select, then Apply", 0.5, 0.5, 0.5)
+                GameTooltip:Show()
+            end)
+
+            row:SetScript("OnLeave", function()
+                if petSelectedIdx ~= idx then rowBg:SetTexture(0, 0, 0, 0) end
+                GameTooltip:Hide()
+            end)
+
+            row.bg = rowBg
+            table.insert(petButtons, row)
+            bY = bY + ROW_HEIGHT + 1
+        end
+
+        listContent:SetHeight(math.max(1, bY))
+    end
+
+    -- Search debounce
+    local petSearchTimer = CreateFrame("Frame")
+    petSearchTimer:Hide()
+    petSearchTimer.elapsed = 0
+    petSearchTimer:SetScript("OnUpdate", function(self, dt)
+        self.elapsed = self.elapsed + dt
+        if self.elapsed >= 0.3 then
+            self:Hide()
+            FilterPets(searchBox:GetText())
+            BuildPetList()
+        end
+    end)
+    searchBox:SetScript("OnTextChanged", function(self)
+        petSearchTimer.elapsed = 0
+        petSearchTimer:Show()
+        if self:GetText() ~= "" then searchClear:Show() else searchClear:Hide() end
+    end)
+
+    -- Apply pet morph
+    btnApplyPet:SetScript("OnClick", function()
+        if petSelectedIdx and petFilteredList[petSelectedIdx] then
+            local entry = petFilteredList[petSelectedIdx]
+            if IsMorpherReady() then
+                SendMorphCommand("PET_MORPH:" .. entry.displayID)
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Pet morphed to " .. entry.name .. " (" .. entry.displayID .. ")")
+            else
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: |cffff0000DLL not loaded!|r")
+            end
+            PlaySound("gsTitleOptionOK")
+        end
+    end)
+
+    -- Reset pet morph
+    btnResetPet:SetScript("OnClick", function()
+        if IsMorpherReady() then
+            SendMorphCommand("PET_RESET")
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Pet appearance reset!")
+        end
+        PlaySound("gsTitleOptionOK")
+    end)
+
+    -- Initialize on show
+    petTab:SetScript("OnShow", function()
+        if #petFilteredList == 0 then
+            FilterPets("")
+            BuildPetList()
+        end
+    end)
+end
+
+---------------- COMBAT PETS TAB ----------------
+
+do
+    local hpetTab = mainFrame.tabs.combatPets
+    local ROW_HEIGHT = 32
+
+    -- ========== MODE TOGGLE (Curated / All Creatures) ==========
+    local MODE_CURATED = 1
+    local MODE_ALL = 2
+    local currentMode = MODE_CURATED
+
+    -- Row 1: Mode buttons + Display ID input
+    local topBar = CreateFrame("Frame", nil, hpetTab)
+    topBar:SetPoint("TOPLEFT", 6, -4)
+    topBar:SetPoint("RIGHT", -6, 0)
+    topBar:SetHeight(24)
+    topBar:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    })
+    topBar:SetBackdropColor(0.08, 0.06, 0.03, 0.9)
+    topBar:SetBackdropBorderColor(0.60, 0.50, 0.18, 0.7)
+
+    local btnModeCurated = CreateFrame("Button", "$parentHPetModeCurated", topBar, "UIPanelButtonTemplate2")
+    btnModeCurated:SetSize(120, 20)
+    btnModeCurated:SetPoint("LEFT", 4, 0)
+
+    local btnModeAll = CreateFrame("Button", "$parentHPetModeAll", topBar, "UIPanelButtonTemplate2")
+    btnModeAll:SetSize(120, 20)
+    btnModeAll:SetPoint("LEFT", btnModeCurated, "RIGHT", 4, 0)
+
+    -- Display ID input on the right
+    local directIDLabel = topBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    directIDLabel:SetPoint("RIGHT", topBar, "RIGHT", -70, 0)
+    directIDLabel:SetText("|cffC8AA6EDisplay ID:|r")
+
+    local directIDBox = CreateFrame("EditBox", "$parentHPetDirectID", topBar)
+    directIDBox:SetSize(56, 16)
+    directIDBox:SetPoint("LEFT", directIDLabel, "RIGHT", 4, 0)
+    directIDBox:SetAutoFocus(false)
+    directIDBox:SetMaxLetters(6)
+    directIDBox:SetNumeric(true)
+    directIDBox:SetFont("Fonts\\FRIZQT__.TTF", 10)
+    directIDBox:SetTextColor(0.95, 0.88, 0.65)
+    do
+        local idBg = directIDBox:CreateTexture(nil, "BACKGROUND")
+        idBg:SetAllPoints()
+        idBg:SetTexture(0, 0, 0, 0.5)
+        local idBorder = directIDBox:CreateTexture(nil, "BORDER")
+        idBorder:SetPoint("TOPLEFT", -1, 1)
+        idBorder:SetPoint("BOTTOMRIGHT", 1, -1)
+        idBorder:SetTexture(0.50, 0.42, 0.18, 0.6)
+    end
+    directIDBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    directIDBox:SetScript("OnEnterPressed", function(self)
+        local id = tonumber(self:GetText())
+        if id and id > 0 then
+            if IsMorpherReady() then
+                SendMorphCommand("HPET_MORPH:" .. id)
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Combat pet morphed to display ID " .. id)
+            else
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: |cffff0000DLL not loaded!|r")
+            end
+            PlaySound("gsTitleOptionOK")
+        end
+        self:ClearFocus()
+    end)
+
+    -- Row 2: Search bar (left) + Type filter (right), on the SAME row but separate containers
+    local searchContainer = CreateFrame("Frame", nil, hpetTab)
+    searchContainer:SetPoint("TOPLEFT", 6, -30)
+    searchContainer:SetHeight(24)
+
+    -- Type filter container (right side, fixed width)
+    local typeContainer = CreateFrame("Frame", nil, hpetTab)
+    typeContainer:SetPoint("TOPRIGHT", -6, -30)
+    typeContainer:SetSize(200, 24)
+    typeContainer:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    })
+    typeContainer:SetBackdropColor(0.06, 0.05, 0.03, 0.95)
+    typeContainer:SetBackdropBorderColor(0.60, 0.50, 0.18, 0.8)
+
+    -- Search container fills to the left of type filter
+    searchContainer:SetPoint("RIGHT", typeContainer, "LEFT", -4, 0)
+    searchContainer:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    })
+    searchContainer:SetBackdropColor(0.06, 0.05, 0.03, 0.95)
+    searchContainer:SetBackdropBorderColor(0.60, 0.50, 0.18, 0.8)
+
+    local hpSearchIcon = searchContainer:CreateTexture(nil, "OVERLAY")
+    hpSearchIcon:SetSize(14, 14)
+    hpSearchIcon:SetPoint("LEFT", 6, 0)
+    hpSearchIcon:SetTexture("Interface\\Common\\UI-Searchbox-Icon")
+    hpSearchIcon:SetVertexColor(0.80, 0.65, 0.22)
+
+    local searchBox = CreateFrame("EditBox", "$parentHPetSearch", searchContainer)
+    searchBox:SetPoint("LEFT", hpSearchIcon, "RIGHT", 4, 0)
+    searchBox:SetPoint("RIGHT", -20, 0)
+    searchBox:SetHeight(18)
+    searchBox:SetAutoFocus(false)
+    searchBox:SetMaxLetters(40)
+    searchBox:SetFont("Fonts\\FRIZQT__.TTF", 11)
+    searchBox:SetTextColor(0.95, 0.88, 0.65)
+    searchBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
+    local searchHint = searchBox:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    searchHint:SetPoint("LEFT", 2, 0)
+    searchHint:SetText("Search combat pets...")
+    searchBox:SetScript("OnEditFocusGained", function() searchHint:Hide() end)
+    searchBox:SetScript("OnEditFocusLost", function(self)
+        if self:GetText() == "" then searchHint:Show() end
+    end)
+
+    local hpSearchClear = CreateFrame("Button", nil, searchContainer)
+    hpSearchClear:SetSize(14, 14)
+    hpSearchClear:SetPoint("RIGHT", -4, 0)
+    hpSearchClear:SetNormalTexture("Interface\\FriendsFrame\\ClearBroadcastIcon")
+    hpSearchClear:SetAlpha(0.5)
+    hpSearchClear:Hide()
+    hpSearchClear:SetScript("OnEnter", function(self) self:SetAlpha(1) end)
+    hpSearchClear:SetScript("OnLeave", function(self) self:SetAlpha(0.5) end)
+    hpSearchClear:SetScript("OnClick", function()
+        searchBox:SetText("")
+        searchBox:ClearFocus()
+        searchHint:Show()
+        hpSearchClear:Hide()
+    end)
+
+    -- ========== TYPE FILTER (inside typeContainer) ==========
+    local familyLabel = typeContainer:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    familyLabel:SetPoint("LEFT", 6, 0)
+    familyLabel:SetText("|cffC8AA6EType:|r")
+
+    local allFamilies = {}
+    local familySet = {}
+    if ns.combatPetsDB then
+        for _, entry in ipairs(ns.combatPetsDB) do
+            if not familySet[entry[2]] then
+                familySet[entry[2]] = true
+                table.insert(allFamilies, entry[2])
+            end
+        end
+        table.sort(allFamilies)
+    end
+    table.insert(allFamilies, 1, "All Types")
+
+    local familyIdx = 1
+    local familyBtn = CreateFrame("Button", "$parentHPetFamilyBtn", typeContainer, "UIPanelButtonTemplate2")
+    familyBtn:SetSize(130, 18)
+    familyBtn:SetPoint("LEFT", familyLabel, "RIGHT", 4, 0)
+    familyBtn:SetText("|cffffd700All Types|r")
+
+    -- Result count label (between search and list)
+    local countLabel = hpetTab:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    countLabel:SetPoint("TOPRIGHT", -12, -56)
+    countLabel:SetText("")
+
+    -- ========== LIST AREA ==========
+    local listBg = CreateFrame("Frame", "$parentHPetListBg", hpetTab)
+    listBg:SetPoint("TOPLEFT", 6, -58)
+    listBg:SetPoint("BOTTOMRIGHT", -6, 38)
+    listBg:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 2, right = 2, top = 2, bottom = 2 }
+    })
+    listBg:SetBackdropColor(0.04, 0.03, 0.03, 0.9)
+    listBg:SetBackdropBorderColor(0.80, 0.65, 0.22, 0.85)
+
+    local listScroll = CreateFrame("ScrollFrame", "$parentHPetListScroll", listBg, "UIPanelScrollFrameTemplate")
+    listScroll:SetPoint("TOPLEFT", 4, -4)
+    listScroll:SetPoint("BOTTOMRIGHT", -22, 4)
+
+    local listContent = CreateFrame("Frame", "$parentHPetListContent", listScroll)
+    listContent:SetSize(listScroll:GetWidth(), 1)
+    listScroll:SetScrollChild(listContent)
+
+    -- ========== BOTTOM BUTTONS ==========
+    local bottomBar = CreateFrame("Frame", nil, hpetTab)
+    bottomBar:SetPoint("BOTTOMLEFT", 6, 2)
+    bottomBar:SetPoint("BOTTOMRIGHT", -6, 2)
+    bottomBar:SetHeight(34)
+    bottomBar:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    })
+    bottomBar:SetBackdropColor(0.08, 0.06, 0.03, 0.9)
+    bottomBar:SetBackdropBorderColor(0.60, 0.50, 0.18, 0.7)
+
+    local btnApplyHPet = CreateFrame("Button", "$parentBtnApplyHPet", bottomBar, "UIPanelButtonTemplate2")
+    btnApplyHPet:SetSize(130, 24)
+    btnApplyHPet:SetPoint("LEFT", 6, 0)
+    btnApplyHPet:SetText("|cffF5C842Apply Morph|r")
+    btnApplyHPet:Disable()
+
+    local btnResetHPet = CreateFrame("Button", "$parentBtnResetHPet", bottomBar, "UIPanelButtonTemplate2")
+    btnResetHPet:SetSize(100, 24)
+    btnResetHPet:SetPoint("LEFT", btnApplyHPet, "RIGHT", 4, 0)
+    btnResetHPet:SetText("|cffD4A44EReset|r")
+
+    -- Separator line between reset and size
+    local bottomSep = bottomBar:CreateTexture(nil, "ARTWORK")
+    bottomSep:SetSize(1, 18)
+    bottomSep:SetPoint("LEFT", btnResetHPet, "RIGHT", 8, 0)
+    bottomSep:SetTexture(0.50, 0.42, 0.18, 0.5)
+
+    -- Pet size controls
+    local petSizeLabel = bottomBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    petSizeLabel:SetPoint("LEFT", bottomSep, "RIGHT", 8, 0)
+    petSizeLabel:SetText("|cffC8AA6EScale:|r")
+
+    local petSizeBox = CreateFrame("EditBox", "$parentHPetSizeInput", bottomBar)
+    petSizeBox:SetSize(36, 16)
+    petSizeBox:SetPoint("LEFT", petSizeLabel, "RIGHT", 4, 0)
+    petSizeBox:SetAutoFocus(false)
+    petSizeBox:SetMaxLetters(4)
+    petSizeBox:SetText("1.0")
+    petSizeBox:SetFont("Fonts\\FRIZQT__.TTF", 10)
+    petSizeBox:SetTextColor(0.95, 0.88, 0.65)
+    do
+        local szBg = petSizeBox:CreateTexture(nil, "BACKGROUND")
+        szBg:SetAllPoints()
+        szBg:SetTexture(0, 0, 0, 0.5)
+        local szBorder = petSizeBox:CreateTexture(nil, "BORDER")
+        szBorder:SetPoint("TOPLEFT", -1, 1)
+        szBorder:SetPoint("BOTTOMRIGHT", 1, -1)
+        szBorder:SetTexture(0.50, 0.42, 0.18, 0.6)
+    end
+    petSizeBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
+    local btnPetSize = CreateFrame("Button", "$parentBtnHPetSize", bottomBar, "UIPanelButtonTemplate2")
+    btnPetSize:SetSize(60, 22)
+    btnPetSize:SetPoint("LEFT", petSizeBox, "RIGHT", 4, 0)
+    btnPetSize:SetText("|cffF5C842Resize|r")
+    btnPetSize:SetScript("OnClick", function()
+        local scale = tonumber(petSizeBox:GetText())
+        if scale and scale >= 0.1 and scale <= 10.0 and IsMorpherReady() then
+            SendMorphCommand("HPET_SCALE:" .. scale)
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Combat pet scaled to " .. scale)
+            PlaySound("gsTitleOptionOK")
+        else
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Enter a valid size (0.1 - 10.0)")
+        end
+    end)
+    petSizeBox:SetScript("OnEnterPressed", function(self)
+        btnPetSize:GetScript("OnClick")()
+        self:ClearFocus()
+    end)
+
+    -- ========== STATE ==========
+    local hpetButtons = {}
+    local hpetSelectedIdx = nil
+    local hpetFilteredList = {}
+    local MAX_RESULTS = 200 -- cap for All Creatures to avoid lag
+
+    -- ========== FILTER: CURATED MODE ==========
+    local function FilterCurated(query)
+        hpetFilteredList = {}
+        local db = ns.combatPetsDB or {}
+        local selFamily = allFamilies[familyIdx]
+        local filterFamily = (selFamily ~= "All Types")
+        if not query or query == "" then
+            for i, entry in ipairs(db) do
+                if not filterFamily or entry[2] == selFamily then
+                    table.insert(hpetFilteredList, { idx = i, name = entry[1], family = entry[2], displayID = entry[3], modelPath = entry[4], npcID = entry[5] })
+                end
+            end
+        else
+            local q = query:lower()
+            for i, entry in ipairs(db) do
+                if (not filterFamily or entry[2] == selFamily) and (entry[1]:lower():find(q, 1, true) or entry[2]:lower():find(q, 1, true) or tostring(entry[3]):find(q, 1, true)) then
+                    table.insert(hpetFilteredList, { idx = i, name = entry[1], family = entry[2], displayID = entry[3], modelPath = entry[4], npcID = entry[5] })
+                end
+            end
+        end
+    end
+
+    -- ========== FILTER: ALL CREATURES MODE ==========
+    -- Pre-build sorted creature list once for performance
+    local creatureSortedList = nil
+    local function GetCreatureSortedList()
+        if creatureSortedList then return creatureSortedList end
+        creatureSortedList = {}
+        local db = ns.creatureDisplayDB
+        if not db then return creatureSortedList end
+        for did, name in pairs(db) do
+            table.insert(creatureSortedList, { did = did, name = name, nameLower = name:lower() })
+        end
+        table.sort(creatureSortedList, function(a, b) return a.name < b.name end)
+        return creatureSortedList
+    end
+
+    local function FilterAllCreatures(query)
+        hpetFilteredList = {}
+        local sorted = GetCreatureSortedList()
+        if not query or query == "" or #query < 2 then
+            -- No search query: show first MAX_RESULTS creatures alphabetically
+            local count = 0
+            for _, entry in ipairs(sorted) do
+                table.insert(hpetFilteredList, { idx = entry.did, name = entry.name, family = "Creature", displayID = entry.did })
+                count = count + 1
+                if count >= MAX_RESULTS then break end
+            end
+            return
+        end
+        local q = query:lower()
+        local count = 0
+        for _, entry in ipairs(sorted) do
+            if entry.nameLower:find(q, 1, true) or tostring(entry.did):find(q, 1, true) then
+                table.insert(hpetFilteredList, { idx = entry.did, name = entry.name, family = "Creature", displayID = entry.did })
+                count = count + 1
+                if count >= MAX_RESULTS then break end
+            end
+        end
+    end
+
+    -- ========== BUILD LIST UI ==========
+    local function BuildHPetList()
+        for _, b in ipairs(hpetButtons) do b:Hide() end
+        hpetButtons = {}
+        hpetSelectedIdx = nil
+        btnApplyHPet:Disable()
+
+        countLabel:SetText("")
+
+        local bY = 0
+        for idx, entry in ipairs(hpetFilteredList) do
+            local row = CreateFrame("Button", nil, listContent)
+            row:SetSize(listContent:GetWidth() - 4, ROW_HEIGHT)
+            row:SetPoint("TOPLEFT", 2, -bY)
+
+            local rowBg = row:CreateTexture(nil, "BACKGROUND")
+            rowBg:SetAllPoints()
+            rowBg:SetTexture(0, 0, 0, 0)
+
+            -- Icon
+            local icon = row:CreateTexture(nil, "ARTWORK")
+            icon:SetSize(ROW_HEIGHT - 4, ROW_HEIGHT - 4)
+            icon:SetPoint("LEFT", 4, 0)
+            -- Different icons per type
+            local iconTex = "Interface\\Icons\\Ability_Hunter_BeastCall"
+            if entry.family == "Warlock" then
+                iconTex = "Interface\\Icons\\Spell_Shadow_SummonImp"
+            elseif entry.family == "Mage" then
+                iconTex = "Interface\\Icons\\Spell_Frost_SummonWaterElemental_2"
+            elseif entry.family == "Creature" then
+                iconTex = "Interface\\Icons\\INV_Misc_Head_Dragon_01"
+            end
+            icon:SetTexture(iconTex)
+            icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+            local iconBorder = row:CreateTexture(nil, "OVERLAY")
+            iconBorder:SetSize(ROW_HEIGHT - 2, ROW_HEIGHT - 2)
+            iconBorder:SetPoint("CENTER", icon, "CENTER", 0, 0)
+            iconBorder:SetTexture("Interface\\Buttons\\UI-Quickslot2")
+            iconBorder:SetTexCoord(0.2, 0.8, 0.2, 0.8)
+
+            -- Name
+            local nameStr = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            nameStr:SetPoint("LEFT", icon, "RIGHT", 8, 0)
+            nameStr:SetText("|cffffd700" .. entry.name .. "|r")
+            nameStr:SetWidth(250)
+            nameStr:SetJustifyH("LEFT")
+
+            -- Type/Family
+            local famStr = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            famStr:SetPoint("LEFT", nameStr, "RIGHT", 4, 0)
+            famStr:SetText("|cff8a7d6a" .. entry.family .. "|r")
+            famStr:SetWidth(100)
+            famStr:SetJustifyH("LEFT")
+
+            -- Display ID
+            local idStr = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            idStr:SetPoint("RIGHT", -8, 0)
+            idStr:SetText("|cff6a6050" .. entry.displayID .. "|r")
+
+            row:SetScript("OnClick", function()
+                if hpetSelectedIdx and hpetButtons[hpetSelectedIdx] then
+                    hpetButtons[hpetSelectedIdx].bg:SetTexture(0, 0, 0, 0)
+                end
+                hpetSelectedIdx = idx
+                rowBg:SetTexture(0.6, 0.48, 0.15, 0.3)
+                btnApplyHPet:Enable()
+            end)
+
+            row:SetScript("OnEnter", function()
+                if hpetSelectedIdx ~= idx then rowBg:SetTexture(1, 1, 1, 0.05) end
+                GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+                GameTooltip:AddLine(entry.name)
+                GameTooltip:AddLine("Type: " .. entry.family, 1, 0.82, 0.1)
+                GameTooltip:AddLine("Display ID: " .. entry.displayID, 1, 1, 1)
+                GameTooltip:AddLine("Click to select, then Apply", 0.5, 0.5, 0.5)
+                GameTooltip:Show()
+            end)
+
+            row:SetScript("OnLeave", function()
+                if hpetSelectedIdx ~= idx then rowBg:SetTexture(0, 0, 0, 0) end
+                GameTooltip:Hide()
+            end)
+
+            row.bg = rowBg
+            table.insert(hpetButtons, row)
+            bY = bY + ROW_HEIGHT + 1
+        end
+
+        listContent:SetHeight(math.max(1, bY))
+    end
+
+    -- ========== REFRESH ==========
+    local function RefreshList()
+        local query = searchBox:GetText()
+        if currentMode == MODE_CURATED then
+            FilterCurated(query)
+        else
+            FilterAllCreatures(query)
+        end
+        BuildHPetList()
+    end
+
+    -- ========== MODE BUTTON VISUALS ==========
+    local function UpdateModeButtons()
+        if currentMode == MODE_CURATED then
+            btnModeCurated:SetText("|cffffd700> Curated Pets|r")
+            btnModeAll:SetText("|cff888888All Creatures|r")
+            typeContainer:Show()
+            -- Shrink search to make room for type filter
+            searchContainer:SetPoint("RIGHT", typeContainer, "LEFT", -4, 0)
+            searchHint:SetText("Search combat pets...")
+        else
+            btnModeCurated:SetText("|cff888888Curated Pets|r")
+            btnModeAll:SetText("|cffffd700> All Creatures|r")
+            typeContainer:Hide()
+            -- Expand search to full width
+            searchContainer:SetPoint("RIGHT", hpetTab, "RIGHT", -6, 0)
+            searchHint:SetText("Search all creatures...")
+        end
+        if searchBox:GetText() == "" then
+            searchHint:Show()
+        end
+    end
+
+    btnModeCurated:SetScript("OnClick", function()
+        currentMode = MODE_CURATED
+        UpdateModeButtons()
+        RefreshList()
+    end)
+    btnModeAll:SetScript("OnClick", function()
+        currentMode = MODE_ALL
+        UpdateModeButtons()
+        RefreshList()
+    end)
+
+    -- ========== FAMILY FILTER CYCLING ==========
+    familyBtn:SetScript("OnClick", function()
+        familyIdx = familyIdx + 1
+        if familyIdx > #allFamilies then familyIdx = 1 end
+        familyBtn:SetText("|cffffd700" .. allFamilies[familyIdx] .. "|r")
+        RefreshList()
+    end)
+    familyBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine("Click to cycle types")
+        GameTooltip:AddLine("Right-click to reset to All", 0.7, 0.7, 0.7)
+        GameTooltip:Show()
+    end)
+    familyBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    familyBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    familyBtn:HookScript("OnClick", function(self, button)
+        if button == "RightButton" then
+            familyIdx = 1
+            familyBtn:SetText("|cffffd700All Types|r")
+            RefreshList()
+        end
+    end)
+
+    -- ========== SEARCH DEBOUNCE ==========
+    local hpetSearchTimer = CreateFrame("Frame")
+    hpetSearchTimer:Hide()
+    hpetSearchTimer.elapsed = 0
+    hpetSearchTimer:SetScript("OnUpdate", function(self, dt)
+        self.elapsed = self.elapsed + dt
+        if self.elapsed >= 0.3 then
+            self:Hide()
+            RefreshList()
+        end
+    end)
+    searchBox:SetScript("OnTextChanged", function(self)
+        hpetSearchTimer.elapsed = 0
+        hpetSearchTimer:Show()
+        if self:GetText() ~= "" then hpSearchClear:Show() else hpSearchClear:Hide() end
+    end)
+
+    -- ========== APPLY BUTTON ==========
+    btnApplyHPet:SetScript("OnClick", function()
+        if hpetSelectedIdx and hpetFilteredList[hpetSelectedIdx] then
+            local entry = hpetFilteredList[hpetSelectedIdx]
+            if IsMorpherReady() then
+                SendMorphCommand("HPET_MORPH:" .. entry.displayID)
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Combat pet morphed to " .. entry.name .. " (" .. entry.displayID .. ")")
+            else
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: |cffff0000DLL not loaded!|r")
+            end
+            PlaySound("gsTitleOptionOK")
+        end
+    end)
+
+    -- ========== RESET BUTTON ==========
+    btnResetHPet:SetScript("OnClick", function()
+        if IsMorpherReady() then
+            SendMorphCommand("HPET_RESET")
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Combat pet appearance reset!")
+        end
+        PlaySound("gsTitleOptionOK")
+    end)
+
+    -- ========== INIT ON SHOW ==========
+    hpetTab:SetScript("OnShow", function()
+        UpdateModeButtons()
+        if #hpetFilteredList == 0 and currentMode == MODE_CURATED then
+            RefreshList()
+        end
     end)
 end
 
@@ -1552,9 +3710,14 @@ do
         return cb
     end
 
-    -- Settings checkboxes removed: shortcuts tooltip, hair hiding, announce appearance
-    -- yOffset = yOffset - 28
+    -- Persistence settings
     createCheckbox(settingsTab, "Persist morph across sessions", "saveMorphState", yOffset)
+    yOffset = yOffset - 28
+    createCheckbox(settingsTab, "Save mount morph per character", "saveMountMorph", yOffset)
+    yOffset = yOffset - 28
+    createCheckbox(settingsTab, "Save pet morph per character", "savePetMorph", yOffset)
+    yOffset = yOffset - 28
+    createCheckbox(settingsTab, "Save combat pet morph per character", "saveCombatPetMorph", yOffset)
     yOffset = yOffset - 28
     local dbwCheckbox = createCheckbox(settingsTab, "Show Deathbringer's Will proc form", "showDBWProc", yOffset)
     -- When toggling the DBW setting, immediately update the suspend state
@@ -1601,7 +3764,7 @@ do
 
     settingsTab:SetScript("OnShow", function()
         if IsMorpherReady() then
-            statusText:SetText("|cff00ff00Morpher DLL: LOADED|r")
+            statusText:SetText("|cff4ACC4AMorpher DLL: LOADED|r")
         else
             statusText:SetText("|cffff0000Morpher DLL: NOT LOADED|r\nPlace dinput8.dll\nin your WoW folder.")
         end
@@ -1624,7 +3787,6 @@ do
     mainFrame:RegisterEvent("UNIT_AURA")
     mainFrame:RegisterEvent("CHAT_MSG_ADDON")
     mainFrame:RegisterEvent("PLAYER_LOGIN")
-
     -- Track form state for edge detection (only act on transitions)
     local lastKnownForm = -1
     local lastKnownMounted = false
@@ -1647,7 +3809,24 @@ do
 
     mainFrame:SetScript("OnEvent", function(self, event, ...)
         if event == "PLAYER_LOGIN" then
-            -- First login: send full state after a short delay for world to load
+            -- Initialize per-character SavedVariables
+            if not TransmorpherCharacterState then
+                TransmorpherCharacterState = {Items={}, Morph=nil, Scale=nil, MountDisplay=nil, PetDisplay=nil, HunterPetDisplay=nil, HunterPetScale=nil}
+            end
+            if not TransmorpherCharacterState.Items then
+                TransmorpherCharacterState.Items = {}
+            end
+
+            -- Flag: the next SendFullMorphState will prepend RESET:ALL so
+            -- the DLL wipe + character-restore is one atomic batch.
+            needsCharacterReset = true
+
+            -- Immediately send RESET:ALL to the DLL so stale state from a
+            -- previous character is cleared within the next 20ms tick.
+            -- The full morph state will be sent after the delayed schedule.
+            SendRawMorphCommand("RESET:ALL")
+
+            -- Evaluate current form/proc state
             lastKnownForm = GetShapeshiftForm()
             lastKnownMounted = IsMounted() or false
             morphSuspended = IsModelChangingForm()
@@ -1655,7 +3834,9 @@ do
             if morphSuspended or dbwSuspended then
                 SendRawMorphCommand("SUSPEND")
             else
-                ScheduleMorphSend(0.3)
+                -- PLAYER_ENTERING_WORLD will fire shortly and override this
+                -- with a 0.05 s timer, but schedule a 0.4 s fallback just in case.
+                ScheduleMorphSend(0.4)
             end
 
         elseif event == "PLAYER_ENTERING_WORLD" or event == "ZONE_CHANGED_NEW_AREA" then
@@ -1745,12 +3926,12 @@ SlashCmdList["Transmorpher"] = function(msg)
     if msg == "reset" then
         if IsMorpherReady() then
             SendMorphCommand("RESET:ALL")
-            SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: All morphs reset!")
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: All morphs reset!")
         else
-            SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: |cffff0000DLL not loaded!|r")
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: |cffff0000DLL not loaded!|r")
         end
     elseif msg == "status" then
-            SELECTED_CHAT_FRAME:AddMessage("|ccff6ff98<Transmorpher>|r: |cff00ff00Stealth Mode Active|r\nCommunicating via memory buffer.")
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: |cff00ff00Stealth Mode Active|r\nCommunicating via memory buffer.")
     else
         if mainFrame:IsShown() then mainFrame:Hide() else mainFrame:Show() end
     end
@@ -1771,6 +3952,46 @@ do
     btn:SetFrameStrata("HIGH")
     btn:SetFrameLevel(CharacterModelFrame:GetFrameLevel() + 15)
     btn:RegisterForClicks("LeftButtonUp")
+    btn:SetMovable(true)
+    btn:SetClampedToScreen(true)
+    btn:RegisterForDrag("RightButton")
+
+    -- Drag handling — right-click drag to freely reposition
+    local isDragging = false
+
+    local function SaveButtonPosition()
+        local parentL = CharacterModelFrame:GetLeft()
+        local parentT = CharacterModelFrame:GetTop()
+        local bL = btn:GetLeft()
+        local bT = btn:GetTop()
+        if not parentL or not parentT or not bL or not bT then return end
+        local xOff = bL - parentL
+        local yOff = bT - parentT
+        btn:ClearAllPoints()
+        btn:SetPoint("TOPLEFT", CharacterModelFrame, "TOPLEFT", xOff, yOff)
+        -- Save per-character
+        if not TransmorpherCharacterState then
+            TransmorpherCharacterState = { Items = {}, Morph = nil, Scale = nil, MountDisplay = nil, PetDisplay = nil, HunterPetDisplay = nil }
+        end
+        TransmorpherCharacterState.paperdollButtonPos = { x = xOff, y = yOff }
+    end
+
+    btn:SetScript("OnDragStart", function(self)
+        isDragging = true
+        self:StartMoving()
+    end)
+    btn:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        SaveButtonPosition()
+        isDragging = false
+    end)
+
+    -- Restore saved per-character position
+    if TransmorpherCharacterState and TransmorpherCharacterState.paperdollButtonPos then
+        local p = TransmorpherCharacterState.paperdollButtonPos
+        btn:ClearAllPoints()
+        btn:SetPoint("TOPLEFT", CharacterModelFrame, "TOPLEFT", p.x, p.y)
+    end
 
     -- Dark square background
     local bg = btn:CreateTexture(nil, "BACKGROUND")
@@ -1826,6 +4047,7 @@ do
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
         GameTooltip:AddLine("|cffFFD100Transmogrifier|r")
         GameTooltip:AddLine("Change your appearance", 0.7, 0.7, 0.7, true)
+        GameTooltip:AddLine("|cff888888Right-click drag to move|r", 0.5, 0.5, 0.5, true)
         GameTooltip:Show()
     end)
     btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -1837,9 +4059,17 @@ do
         UpdateState()
     end)
 
-    ---- Press feel ----
-    btn:SetScript("OnMouseDown", function() icon:SetPoint("CENTER", 1, -1) end)
-    btn:SetScript("OnMouseUp",   function() icon:SetPoint("CENTER", 0,  0) end)
+    ---- Press feel (only for left-click, skip during right-drag) ----
+    btn:SetScript("OnMouseDown", function(self, button)
+        if button == "LeftButton" and not isDragging then
+            icon:SetPoint("CENTER", 1, -1)
+        end
+    end)
+    btn:SetScript("OnMouseUp", function(self, button)
+        if button == "LeftButton" then
+            icon:SetPoint("CENTER", 0, 0)
+        end
+    end)
 
     ---- Keep state synced ----
     if mainFrame then
@@ -1849,4 +4079,4 @@ do
 end
 
 -- Print load message
-DEFAULT_CHAT_FRAME:AddMessage("|cffFFD100\226\154\148|r |cff00d4ffTransmorpher|r v1.1.0 loaded \226\128\148 |cff00ff00/morph|r or click the button on your character model.")
+DEFAULT_CHAT_FRAME:AddMessage("|cffF5C842\226\154\148 Transmorpher|r v1.0.3 loaded \226\128\148 |cffC8AA6E/morph|r or click the button on your character model.")

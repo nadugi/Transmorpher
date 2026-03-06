@@ -1,14 +1,17 @@
 ## Interface: 30300
 ## Author: VaultGate
 ## Title: Transmorpher
-## Notes: Client-side Transmog system for WotLK 3.3.5a. Requires dinput8.dll. v1.0.2: Preview always shows original character form, removed unnecessary settings.
-## SavedVariables: TransmorpherSavedLooks
-## SavedVariables: TransmorpherSettings
+## Notes: Client-side Transmog system for WotLK 3.3.5a. Requires dinput8.dll. v1.0.3: Mount, pet & combat pet morphing with 3D preview.
+## SavedVariables: TransmorpherSavedLooks, TransmorpherMorphFavorites, TransmorpherSettings
 ## SavedVariablesPerCharacter: TransmorpherCharacterState
-## Version: 1.0.2
+## Version: 1.0.3
 
 db\ItemsDB.lua
 db\ItemsAPI.lua
+db\MountsDB.lua
+db\PetsDB.lua
+db\HunterPetsDB.lua
+db\CreatureDisplayDB.lua
 db\PreviewSetupDB.lua
 db\PreviewSetupAPI.lua
 

@@ -9,10 +9,13 @@ Transmorpher is a powerful tool that gives you complete control over your charac
 ### Key Features:
 - **Item Morphing**: Instantly change any armor or weapon slot to any item in the game database.
 - **Character Morphing**: Morph into any race, gender, NPC, or legendary creature (Lich King, Illidan, etc.).
+- **Mount Morphing**: Change your mount's appearance to any mount in the WotLK database.
+- **Pet Morphing**: Morph your non-combat pet into any critter from the full WotLK database.
+- **Combat Pet Morphing**: Morph your DK, Hunter, or Warlock pet into any combat pet or creature. Supports search by name or ID, with adjustable pet size.
 - **Visual Customization**: Adjust your character's scale and size.
 - **Save System**: Create your favorite "Looks" and save them.
-- **Automatic Loading**: Your transmogs and morphs are saved and will be **automatically loaded** every time you open the game.
-- **Native UI**: Includes a modern interface and a "Transmog" button directly on your character frame.
+- **Per-Character Persistence**: Your transmogs, morphs, mount, pet, and combat pet morphs are saved per character and automatically loaded every time you open the game.
+- **Native UI**: Includes a modern golden-themed interface and a draggable "Transmog" button directly on your character frame.
 
 ## Installation
 1. **DLL**: Place `dinput8.dll` in your WoW folder (next to `Wow.exe`).
@@ -23,7 +26,10 @@ Transmorpher is a powerful tool that gives you complete control over your charac
 - Use the **Transmog** button on your character frame.
 - **Left-click** items to preview.
 - **Alt + Left-click** slots to apply morphs.
-- Use the **Morph** tab for race and scale changes.
+- Use the **Morph** tab for race, scale changes, and creature search.
+- Use the **Mounts** tab to change your mount appearance.
+- Use the **Pets** tab to change your non-combat pet appearance.
+- Use the **Combat Pets** tab to morph your DK/Hunter/Warlock pet.
 
 ## Releases
 Check the [Releases](https://github.com/Kirazul/Transmorpher/releases) section for:
@@ -32,7 +38,18 @@ Check the [Releases](https://github.com/Kirazul/Transmorpher/releases) section f
 - Full Source Code.
 
 
-## Changelog (1.0.2)
+## Changelog (1.0.3)
+- **Draggable Character Info Button**: The Transmog button on your character frame is now draggable (Right Click + Left Click to move it).
+- **Appearance Tab Improvements**: Improved the Appearance tab with an appearance preview panel.
+- **Mount Morphing**: Added mount morphing with the full WotLK mount database.
+- **Non-Combat Pet Morphing**: Added non-combat pet morphing with the full WotLK database.
+- **Combat Pet Morphing**: Added combat pet morphing (DK pet, Hunter pet, Warlock pet) — fully customizable. Morph your pet into any known combat pet or any creature from the full database. Supports search by name or ID, and adjustable pet size.
+- **Morph Tab Creature Search**: Improved the Morph tab — you can now search any creature by name or ID.
+- **Per-Character Save Settings**: Added settings to save mount, pet, and combat pet morphs per character.
+- **Character Switch Fix**: Fixed morph issues when switching characters.
+- **Golden UI Theme**: General UI improvements with a cohesive golden theme.
+
+## Changelog (1.1.0)
 - **Weapon Transmog Overhaul**: Improved weapon transmog handling for both main-hand and off-hand slots.
 - **Stealth & Combat Fix**: Fixed weapon transmogs being removed when stealthing/unstealthing, entering combat, or leaving combat.
 - **Deathbringer's Will Fix**: Fixed Deathbringer's Will procs removing the morph.

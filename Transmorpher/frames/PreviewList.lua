@@ -7,9 +7,9 @@ local itemBackdrop = { -- small "DressingRoom"s
 	tile = true, tileSize = 16, edgeSize = 16,
     insets = { left = 3, right = 3, top = 3, bottom = 3 }
 }
-local itemBackdropColor = {0.25, 0.25, 0.25, 1}
-local itemBackdropBorderColor = {1, 1, 1}
-local selectedItemBackdropBorderColor = {0.843, 0, 1}
+local itemBackdropColor = {0.10, 0.09, 0.08, 1}
+local itemBackdropBorderColor = {0.45, 0.38, 0.28}
+local selectedItemBackdropBorderColor = {0.96, 0.78, 0.26}
 local previewHighlightTexture = "Interface\\Buttons\\ButtonHilight-Square"
 
 
@@ -242,8 +242,16 @@ local function queryItemHandler(functable, itemId, success)
 end
 
 local function PreviewList_Update(self)
-    assert(self.dressingRoomSetup ~= nil, "`SetupModel` first.")
-    assert(#self.itemIds > 0, "`SetItemIds` first.")
+    if self.dressingRoomSetup == nil then return end
+    if #self.itemIds == 0 then
+        -- Nothing to display — hide all dressing rooms
+        for _, dr in ipairs(self.dressingRooms) do
+            dr:OnUpdateModel(nil)
+            dr:ClearModel()
+            dr:Hide()
+        end
+        return
+    end
     local perPage = #self.dressingRooms
     for i, dr in ipairs(self.dressingRooms) do
         local dr = self.dressingRooms[i]
