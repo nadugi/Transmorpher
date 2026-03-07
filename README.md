@@ -1,5 +1,5 @@
 # Transmorpher (3.3.5a)
-![Transmorpher Screenshot](images/screenshot.png)
+![Transmorpher Screenshot](images/screenshot1.png)
 
 A high-performance **transmog addon and morpher** for World of Warcraft 3.3.5a (12340).
 
