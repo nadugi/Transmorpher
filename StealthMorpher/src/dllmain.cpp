@@ -12,11 +12,14 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <psapi.h>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <atomic>
+
+#pragma comment(lib, "psapi.lib")
 
 extern "C" {
     FARPROC p[17] = {0};
@@ -77,6 +80,17 @@ static const uint32_t UNIT_FIELD_CREATEDBY        = 0x10 * 4;  // GUID of unit t
 static uint32_t GetVisibleItemField(int slot) {
     if (slot < 1 || slot > 19) return 0;
     return (0x11B + (slot - 1) * 2) * 4;
+}
+
+// ================================================================
+// Visible enchant field in PLAYER descriptor
+// ================================================================
+// PLAYER_VISIBLE_ITEM uses 2 fields per slot: [displayID, enchantVisualID]
+// GetVisibleItemField(slot) returns the offset for displayID.
+// The enchant visual is at the NEXT field (+1 index = +4 bytes).
+static uint32_t GetVisibleEnchantField(int slot) {
+    if (slot < 1 || slot > 19) return 0;
+    return (0x11B + (slot - 1) * 2 + 1) * 4;  // +1 for enchant field
 }
 
 struct WowObject {
@@ -149,6 +163,36 @@ static WowObject* GetPlayer() {
 }
 
 // ================================================================
+// Enchant Morph Helpers (PLAYER_VISIBLE_ITEM based)
+// ================================================================
+// Read the visible enchant ID from the PLAYER descriptor for a given slot
+static uint32_t ReadVisibleEnchant(WowObject* player, int slot) {
+    if (!player || !player->descriptors) return 0;
+    uint32_t off = GetVisibleEnchantField(slot);
+    if (!off) return 0;
+    __try {
+        return *(uint32_t*)((uint8_t*)player->descriptors + off);
+    } __except(EXCEPTION_EXECUTE_HANDLER) {}
+    return 0;
+}
+
+// Write a visible enchant ID to the PLAYER descriptor for a given slot
+static bool WriteVisibleEnchant(WowObject* player, int slot, uint32_t enchantId) {
+    if (!player || !player->descriptors) return false;
+    uint32_t off = GetVisibleEnchantField(slot);
+    if (!off) return false;
+    __try {
+        uint8_t* desc = (uint8_t*)player->descriptors;
+        uint32_t cur = *(uint32_t*)(desc + off);
+        if (cur != enchantId) {
+            *(uint32_t*)(desc + off) = enchantId;
+            return true;
+        }
+    } __except(EXCEPTION_EXECUTE_HANDLER) {}
+    return false;
+}
+
+// ================================================================
 // Morph State Tracking (DLL-side)
 // ================================================================
 
@@ -157,6 +201,10 @@ static uint32_t g_origDisplay = 0;
 static uint32_t g_origItems[20] = {0};
 static float g_origScale = 1.0f;
 static bool g_saved = false;
+// Sentinel value stored in g_morphItems[slot] when a slot is hidden (item 0).
+// We cannot use 0 itself because 0 means "not morphed" and RefreshOriginals
+// would overwrite g_origItems with the now-zeroed descriptor field.
+static const uint32_t HIDDEN_SENTINEL = UINT32_MAX;
 
 // Active morph state — what the addon has requested
 // 0 means "no morph for this field, use native value"
@@ -177,6 +225,13 @@ static uint32_t g_origPetDisplay = 0;  // original critter display before morph
 static uint32_t g_morphHPet = 0;  // desired hunter pet displayID
 static uint32_t g_origHPetDisplay = 0;  // original hunter pet display before morph
 static float    g_morphHPetScale = 0.0f; // desired hunter pet scale (0 = no change)
+
+// Enchant morph state — visual enchant override for weapons
+// slot 16 = Main Hand, slot 17 = Off-Hand (1-based equipment slots)
+static uint32_t g_morphEnchantMH = 0;  // desired enchant ID for main hand
+static uint32_t g_morphEnchantOH = 0;  // desired enchant ID for off-hand
+static uint32_t g_origEnchantMH = 0;   // original enchant ID before morph
+static uint32_t g_origEnchantOH = 0;   // original enchant ID before morph
 
 // Suspension: true when addon signals a model-changing form is active
 static bool g_suspended = false;
@@ -201,6 +256,8 @@ static void UpdateHasMorph() {
     if (g_morphMount > 0)   { g_hasMorph = true; return; }
     if (g_morphPet > 0)     { g_hasMorph = true; return; }
     if (g_morphHPet > 0)    { g_hasMorph = true; return; }
+    if (g_morphEnchantMH > 0) { g_hasMorph = true; return; }
+    if (g_morphEnchantOH > 0) { g_hasMorph = true; return; }
     for (int s = 1; s <= 19; s++) {
         if (g_morphItems[s] > 0) { g_hasMorph = true; return; }
     }
@@ -220,6 +277,13 @@ static void SaveOriginals(WowObject* p) {
     for (int s = 1; s <= 19; s++) {
         uint32_t off = GetVisibleItemField(s);
         if (off) g_origItems[s] = *(uint32_t*)(desc + off);
+    }
+    // Save original enchant visuals from PLAYER_VISIBLE_ITEM
+    {
+        uint32_t offMH = GetVisibleEnchantField(16);
+        uint32_t offOH = GetVisibleEnchantField(17);
+        if (offMH) g_origEnchantMH = *(uint32_t*)(desc + offMH);
+        if (offOH) g_origEnchantOH = *(uint32_t*)(desc + offOH);
     }
     g_saved = true;
     Log("Originals saved (display=%u, scale=%.2f)", g_origDisplay, g_origScale);
@@ -255,6 +319,15 @@ static void RefreshOriginals(WowObject* p) {
             if (off) g_origItems[s] = *(uint32_t*)(desc + off);
         }
     }
+    // Update original enchant visuals if not morphed
+    if (g_morphEnchantMH == 0) {
+        uint32_t off = GetVisibleEnchantField(16);
+        if (off) g_origEnchantMH = *(uint32_t*)(desc + off);
+    }
+    if (g_morphEnchantOH == 0) {
+        uint32_t off = GetVisibleEnchantField(17);
+        if (off) g_origEnchantOH = *(uint32_t*)(desc + off);
+    }
 }
 
 // ================================================================
@@ -271,9 +344,19 @@ static void ReStampWeapons(WowObject* player) {
         if (g_morphItems[s] > 0) {
             uint32_t off = GetVisibleItemField(s);
             if (off) {
-                *(uint32_t*)(desc + off) = g_morphItems[s];
+                uint32_t target = (g_morphItems[s] == HIDDEN_SENTINEL) ? 0 : g_morphItems[s];
+                *(uint32_t*)(desc + off) = target;
             }
         }
+    }
+    // Re-stamp enchant visuals via PLAYER_VISIBLE_ITEM
+    if (g_morphEnchantMH > 0) {
+        uint32_t off = GetVisibleEnchantField(16);
+        if (off) *(uint32_t*)(desc + off) = g_morphEnchantMH;
+    }
+    if (g_morphEnchantOH > 0) {
+        uint32_t off = GetVisibleEnchantField(17);
+        if (off) *(uint32_t*)(desc + off) = g_morphEnchantOH;
     }
 }
 
@@ -434,9 +517,11 @@ static bool ApplyMorphState(WowObject* player) {
         if (g_morphItems[s] > 0) {
             uint32_t off = GetVisibleItemField(s);
             if (off) {
+                // HIDDEN_SENTINEL means "write 0" (hide the slot)
+                uint32_t target = (g_morphItems[s] == HIDDEN_SENTINEL) ? 0 : g_morphItems[s];
                 uint32_t current = *(uint32_t*)(desc + off);
-                if (current != g_morphItems[s]) {
-                    *(uint32_t*)(desc + off) = g_morphItems[s];
+                if (current != target) {
+                    *(uint32_t*)(desc + off) = target;
                     changed = true;
                 }
             }
@@ -463,6 +548,14 @@ static bool DoMorph(const char* cmd, WowObject* player) {
             g_morphDisplay = id;
             update = true;
             Log("Morphed displayId=%u", id);
+        } else if (id == 0) {
+            // MORPH:0 = reset character morph only (preserve item morphs)
+            // Restore native display ID
+            uint32_t nativeDisplay = *(uint32_t*)(desc + UNIT_FIELD_NATIVEDISPLAYID);
+            *(uint32_t*)(desc + UNIT_FIELD_DISPLAYID) = nativeDisplay;
+            g_morphDisplay = 0;
+            update = true;
+            Log("Character morph reset (restored native display=%u)", nativeDisplay);
         }
     }
     else if (strncmp(cmd, "SCALE:", 6) == 0) {
@@ -481,9 +574,12 @@ static bool DoMorph(const char* cmd, WowObject* player) {
             uint32_t off = GetVisibleItemField(slot);
             if (off) {
                 *(uint32_t*)(desc + off) = itemId;
-                g_morphItems[slot] = itemId;
+                // Use HIDDEN_SENTINEL for itemId 0 so the slot stays
+                // "actively morphed" — prevents RefreshOriginals from
+                // corrupting g_origItems and lets MorphGuard re-stamp.
+                g_morphItems[slot] = (itemId == 0) ? HIDDEN_SENTINEL : itemId;
                 update = true;
-                Log("Set slot %d = item %u", slot, itemId);
+                Log("Set slot %d = item %u%s", slot, itemId, itemId == 0 ? " (hidden)" : "");
                 // Weapon slots need extra refresh ticks because
                 // UpdateDisplayInfo may overwrite weapon descriptors
                 if (slot >= 16 && slot <= 18) {
@@ -608,6 +704,62 @@ static bool DoMorph(const char* cmd, WowObject* player) {
         g_morphHPetScale = 0.0f;
         Log("Hunter pet morph reset");
     }
+    else if (strncmp(cmd, "ENCHANT_MH:", 11) == 0) {
+        uint32_t enchantId = (uint32_t)atoi(cmd + 11);
+        if (g_origEnchantMH == 0) {
+            g_origEnchantMH = ReadVisibleEnchant(player, 16);
+        }
+        g_morphEnchantMH = enchantId;
+        if (WriteVisibleEnchant(player, 16, enchantId)) update = true;
+        g_weaponRefreshTicks = 5;
+        Log("Enchant MH set id=%u (orig=%u)", enchantId, g_origEnchantMH);
+    }
+    else if (strncmp(cmd, "ENCHANT_OH:", 11) == 0) {
+        uint32_t enchantId = (uint32_t)atoi(cmd + 11);
+        if (g_origEnchantOH == 0) {
+            g_origEnchantOH = ReadVisibleEnchant(player, 17);
+        }
+        g_morphEnchantOH = enchantId;
+        if (WriteVisibleEnchant(player, 17, enchantId)) update = true;
+        g_weaponRefreshTicks = 5;
+        Log("Enchant OH set id=%u (orig=%u)", enchantId, g_origEnchantOH);
+    }
+    else if (strncmp(cmd, "ENCHANT_RESET_MH", 16) == 0) {
+        if (g_morphEnchantMH > 0) {
+            WriteVisibleEnchant(player, 16, g_origEnchantMH);
+        }
+        g_morphEnchantMH = 0;
+        g_origEnchantMH = 0;
+        g_weaponRefreshTicks = 5;
+        update = true;
+        Log("Enchant MH morph reset");
+    }
+    else if (strncmp(cmd, "ENCHANT_RESET_OH", 16) == 0) {
+        if (g_morphEnchantOH > 0) {
+            WriteVisibleEnchant(player, 17, g_origEnchantOH);
+        }
+        g_morphEnchantOH = 0;
+        g_origEnchantOH = 0;
+        g_weaponRefreshTicks = 5;
+        update = true;
+        Log("Enchant OH morph reset");
+    }
+    else if (strncmp(cmd, "ENCHANT_RESET", 13) == 0) {
+        // Restore original enchant visuals
+        if (g_morphEnchantMH > 0) {
+            WriteVisibleEnchant(player, 16, g_origEnchantMH);
+        }
+        if (g_morphEnchantOH > 0) {
+            WriteVisibleEnchant(player, 17, g_origEnchantOH);
+        }
+        g_morphEnchantMH = 0;
+        g_morphEnchantOH = 0;
+        g_origEnchantMH = 0;
+        g_origEnchantOH = 0;
+        g_weaponRefreshTicks = 5;
+        update = true;
+        Log("Enchant morph reset");
+    }
     else if (strncmp(cmd, "SUSPEND", 7) == 0) {
         // Addon signals: model-changing form active, stop overriding
         g_suspended = true;
@@ -693,6 +845,13 @@ static bool DoMorph(const char* cmd, WowObject* player) {
                     }
                 } __except(EXCEPTION_EXECUTE_HANDLER) {}
             }
+            // Restore enchant visuals via PLAYER_VISIBLE_ITEM
+            if (g_morphEnchantMH > 0) {
+                WriteVisibleEnchant(player, 16, g_origEnchantMH);
+            }
+            if (g_morphEnchantOH > 0) {
+                WriteVisibleEnchant(player, 17, g_origEnchantOH);
+            }
         }
         // ALWAYS clear all morph state — even if g_saved was false.
         // On character switch, the DLL must re-capture originals via SaveOriginals.
@@ -702,8 +861,12 @@ static bool DoMorph(const char* cmd, WowObject* player) {
         g_morphPet = 0;
         g_morphHPet = 0;
         g_morphHPetScale = 0.0f;
+        g_morphEnchantMH = 0;
+        g_morphEnchantOH = 0;
         g_origPetDisplay = 0;
         g_origHPetDisplay = 0;
+        g_origEnchantMH = 0;
+        g_origEnchantOH = 0;
         g_origMount = 0;
         g_origDisplay = 0;
         g_origScale = 1.0f;
@@ -762,8 +925,9 @@ static void MorphGuard(WowObject* player) {
             if (g_morphItems[s] > 0) {
                 uint32_t off = GetVisibleItemField(s);
                 if (off) {
+                    uint32_t target = (g_morphItems[s] == HIDDEN_SENTINEL) ? 0 : g_morphItems[s];
                     uint32_t cur = *(uint32_t*)(desc + off);
-                    if (cur != g_morphItems[s]) {
+                    if (cur != target) {
                         needsRestore = true;
                         break;
                     }
@@ -893,16 +1057,44 @@ static void MorphGuard(WowObject* player) {
             }
         }
     }
+
+    // --- Enchant morph guard ---
+    // Re-apply visible enchant overrides if the game has reset them
+    if (g_morphEnchantMH > 0) {
+        __try {
+            uint32_t curEnchant = ReadVisibleEnchant(player, 16);
+            if (curEnchant != g_morphEnchantMH) {
+                if (g_origEnchantMH == 0 && curEnchant > 0) g_origEnchantMH = curEnchant;
+                WriteVisibleEnchant(player, 16, g_morphEnchantMH);
+            }
+        } __except(EXCEPTION_EXECUTE_HANDLER) {}
+    }
+    if (g_morphEnchantOH > 0) {
+        __try {
+            uint32_t curEnchant = ReadVisibleEnchant(player, 17);
+            if (curEnchant != g_morphEnchantOH) {
+                if (g_origEnchantOH == 0 && curEnchant > 0) g_origEnchantOH = curEnchant;
+                WriteVisibleEnchant(player, 17, g_morphEnchantOH);
+            }
+        } __except(EXCEPTION_EXECUTE_HANDLER) {}
+    }
+    
+    // Pet/mount morphs are persistent and don't need guard logic
 }
 
 // ================================================================
 // Timer callback — runs on WoW's main thread every 20ms
 // ================================================================
+static std::atomic<bool> g_running{true};
 static WNDPROC g_origWndProc = nullptr;
 static HWND    g_wowHwnd = nullptr;
 static UINT_PTR MORPH_TIMER_ID = 0xDEAD;
 
 static VOID CALLBACK MorphTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
+    // Safety check: if DLL is shutting down, exit immediately
+    if (!g_running) return;
+    if (!g_wowHwnd) return;
+    
     __try {
         WowObject* player = GetPlayer();
 
@@ -922,8 +1114,12 @@ static VOID CALLBACK MorphTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWOR
                     g_morphPet = 0;
                     g_morphHPet = 0;
                     g_morphHPetScale = 0.0f;
+                    g_morphEnchantMH = 0;
+                    g_morphEnchantOH = 0;
                     g_origPetDisplay = 0;
                     g_origHPetDisplay = 0;
+                    g_origEnchantMH = 0;
+                    g_origEnchantOH = 0;
                     g_origMount = 0;
                     g_origDisplay = 0;
                     g_origScale = 1.0f;
@@ -1008,7 +1204,6 @@ static VOID CALLBACK MorphTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWOR
 // ================================================================
 // Background thread — finds WoW's window and installs timer
 // ================================================================
-static std::atomic<bool> g_running{true};
 
 static DWORD WINAPI StealthThread(LPVOID lpParam) {
     SetupProxy();
@@ -1047,7 +1242,6 @@ static DWORD WINAPI StealthThread(LPVOID lpParam) {
         Sleep(1000);
     }
 
-    KillTimer(g_wowHwnd, MORPH_TIMER_ID);
     return 0;
 }
 
@@ -1077,9 +1271,25 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         break;
     }
     case DLL_PROCESS_DETACH:
+        // Signal shutdown
         g_running = false;
+        
+        // Kill timer first to stop all memory access
+        if (g_wowHwnd) {
+            KillTimer(g_wowHwnd, MORPH_TIMER_ID);
+            g_wowHwnd = nullptr;
+        }
+        
+        // Uninstall mount hook
         UninstallMountHook();
-        if (g_wowHwnd) KillTimer(g_wowHwnd, MORPH_TIMER_ID);
+        
+        // Give time for any pending operations to complete
+        Sleep(50);
+        
+        // Clear all pointers to prevent access violations
+        g_playerDescBase = 0;
+        
+        Log("DLL detached cleanly");
         break;
     }
     return TRUE;

@@ -14,14 +14,14 @@ ns.combatPetsDB = {
     -- ==============================
     { "Brown Bear",            "Bear",         822,   "Creature\\Bear\\Bear.m2" },
     { "Black Bear",            "Bear",         820,   "Creature\\Bear\\Bear.m2" },
-    { "Polar Bear",            "Bear",         15249, "Creature\\Bear2\\Bear2.m2" },
-    { "Grizzly Bear",          "Bear",         29415, "Creature\\Bear2\\Bear2.m2" },
+    { "Polar Bear",	"Bear",	27659, "Creature\\Bear2\\Bear2.m2" },
+    { "Grizzly Bear",	"Bear",	1083, "Creature\\Bear2\\Bear2.m2" },
     { "Dire Bear (Black)",     "Bear",         15366, "Creature\\Bear2\\Bear2.m2" },
-    { "Armored Bear (Brown)",  "Bear",         29757, "Creature\\Bear2\\Bear2.m2" },
+    { "Armored Bear (Brown)",  "Bear",         29756, "Creature\\Bear2\\Bear2.m2" },  -- Fixed: was 29757 (invalid)
     { "Corrupted Bear",        "Bear",         12037, "Creature\\Bear\\Bear.m2" },
-    { "Ghost Bear",            "Bear",         26647, "Creature\\Bear2\\Bear2.m2" },
+    { "Ghost Bear",            "Bear",         26646, "Creature\\Bear2\\Bear2.m2" },  -- Fixed: was 26647 (invalid)
     { "Ironforge Bear",        "Bear",         3809,  "Creature\\Bear\\Bear.m2" },
-    { "Ashenvale Bear",        "Bear",         2948,  "Creature\\Bear\\Bear.m2" },
+    { "Ashenvale Bear",	"Bear",	982,  "Creature\\Bear\\Bear.m2" },
 
     -- ==============================
     -- BOARS
@@ -29,25 +29,25 @@ ns.combatPetsDB = {
     { "Boar (Brown)",          "Boar",         488,   "Creature\\Boar\\Boar.m2" },
     { "Boar (Black)",          "Boar",         2966,  "Creature\\Boar\\Boar.m2" },
     { "Boar (White)",          "Boar",         16195, "Creature\\Boar\\Boar.m2" },
-    { "Armored Boar",          "Boar",         25767, "Creature\\Boar\\Boar.m2" },
+    { "Armored Boar",          "Boar",         25766, "Creature\\Boar\\Boar.m2" },  -- Fixed: was 25767 (invalid)
     { "Dire Boar",             "Boar",         23932, "Creature\\Boar\\Boar.m2" },
-    { "Helboar",               "Boar",         19473, "Creature\\HelBoar\\HelBoar.m2" },
+    { "Helboar",	"Boar",	11410, "Creature\\HelBoar\\HelBoar.m2" },
     { "Felboar",               "Boar",         20868, "Creature\\HelBoar\\HelBoar.m2" },
     { "Plagued Boar",          "Boar",         7099,  "Creature\\Boar\\Boar.m2" },
 
     -- ==============================
     -- CATS (Tigers, Lions, Panthers, Lynx)
     -- ==============================
-    { "Tiger (Orange)",        "Cat",          274,   "Creature\\Tiger\\Tiger.m2" },
-    { "Tiger (White)",         "Cat",          1191,  "Creature\\Tiger\\Tiger.m2" },
+    { "Tiger (Orange)",        "Cat",          275,   "Creature\\Tiger\\Tiger.m2" },  -- Fixed: was 274 (invalid)
+    { "Tiger (White)",         "Cat",          1192,  "Creature\\Tiger\\Tiger.m2" },  -- Fixed: was 1191 (invalid)
     { "Snow Leopard",          "Cat",          1713,  "Creature\\Tiger\\Tiger.m2" },
     { "Black Panther",         "Cat",          282,   "Creature\\Panther\\Panther.m2" },
-    { "Nightsaber (Purple)",   "Cat",          1553,  "Creature\\Panther\\Panther.m2" },
+    { "Nightsaber (Purple)",   "Cat",          1554,  "Creature\\Panther\\Panther.m2" },  -- Fixed: was 1553 (invalid)
     { "Nightsaber (Black)",    "Cat",          892,   "Creature\\Panther\\Panther.m2" },
     { "Lion",                  "Cat",          2292,  "Creature\\Lion\\Lion.m2" },
-    { "Savannah Prowler",      "Cat",          2385,  "Creature\\Lion\\Lion.m2" },
-    { "Ghost Saber",           "Cat",          8022,  "Creature\\Panther\\Panther.m2" },
-    { "Lynx (Orange)",         "Cat",          21516, "Creature\\Lynx\\Lynx.m2" },
+    { "Savannah Prowler",      "Cat",          2386,  "Creature\\Lion\\Lion.m2" },  -- Fixed: was 2385 (invalid)
+    { "Ghost Saber",	"Cat",	4472,  "Creature\\Panther\\Panther.m2" },
+    { "Lynx (Orange)",         "Cat",          21517, "Creature\\Lynx\\Lynx.m2" },  -- Fixed: was 21516 (invalid)
     { "Lynx (Springpaw)",      "Cat",          20682, "Creature\\Lynx\\Lynx.m2" },
     { "Lynx (White)",          "Cat",          21515, "Creature\\Lynx\\Lynx.m2" },
     { "Saber Worg",            "Cat",          22133, "Creature\\Panther\\Panther.m2" },
@@ -70,7 +70,7 @@ ns.combatPetsDB = {
     -- ==============================
     { "Crocolisk (Green)",     "Crocolisk",    540,   "Creature\\Crocolisk\\Crocolisk.m2" },
     { "Crocolisk (Black)",     "Crocolisk",    5765,  "Creature\\Crocolisk\\Crocolisk.m2" },
-    { "Crocolisk (Red)",       "Crocolisk",    3230,  "Creature\\Crocolisk\\Crocolisk.m2" },
+    { "Crocolisk (Red)",       "Crocolisk",    3231,  "Creature\\Crocolisk\\Crocolisk.m2" },  -- Fixed: was 3230 (invalid)
     { "Outland Crocolisk",     "Crocolisk",    20513, "Creature\\Crocolisk\\Crocolisk.m2" },
     { "Sewer Crocolisk",       "Crocolisk",    26353, "Creature\\Crocolisk\\Crocolisk.m2" },
     { "Crocolisk (White)",     "Crocolisk",    26089, "Creature\\Crocolisk\\Crocolisk.m2" },
@@ -78,38 +78,38 @@ ns.combatPetsDB = {
     -- ==============================
     -- GORILLAS
     -- ==============================
-    { "Gorilla (Gray)",        "Gorilla",      2578,  "Creature\\Gorilla\\Gorilla.m2" },
-    { "Gorilla (White)",       "Gorilla",      2579,  "Creature\\Gorilla\\Gorilla.m2" },
+    { "Gorilla (Gray)",        "Gorilla",      2577,  "Creature\\Gorilla\\Gorilla.m2" },  -- Fixed: was 2578 (invalid)
+    { "Gorilla (White)",       "Gorilla",      2580,  "Creature\\Gorilla\\Gorilla.m2" },  -- Fixed: was 2579 (invalid)
     { "Gorilla (Black)",       "Gorilla",      7093,  "Creature\\Gorilla\\Gorilla.m2" },
-    { "Un'Goro Gorilla",       "Gorilla",      8213,  "Creature\\Gorilla\\Gorilla.m2" },
-    { "Uhk'loc",               "Gorilla",      3586,  "Creature\\Gorilla\\Gorilla.m2" },
+    { "Un'Goro Gorilla",       "Gorilla",      8214,  "Creature\\Gorilla\\Gorilla.m2" },  -- Fixed: was 8213 (invalid)
+    { "Uhk'loc",	"Gorilla",	8129,  "Creature\\Gorilla\\Gorilla.m2" },
 
     -- ==============================
     -- HYENAS
     -- ==============================
-    { "Hyena (Brown)",         "Hyena",        1044,  "Creature\\Hyena\\Hyena.m2" },
-    { "Hyena (Striped)",       "Hyena",        2696,  "Creature\\Hyena\\Hyena.m2" },
-    { "Hyena (Black)",         "Hyena",        4653,  "Creature\\Hyena\\Hyena.m2" },
+    { "Hyena (Brown)",         "Hyena",        1045,  "Creature\\Hyena\\Hyena.m2" },  -- Fixed: was 1044 (invalid)
+    { "Hyena (Striped)",       "Hyena",        2697,  "Creature\\Hyena\\Hyena.m2" },  -- Fixed: was 2696 (invalid)
+    { "Hyena (Black)",         "Hyena",        4654,  "Creature\\Hyena\\Hyena.m2" },  -- Fixed: was 4653 (invalid)
     { "Dire Hyena",            "Hyena",        7133,  "Creature\\Hyena\\Hyena.m2" },
 
     -- ==============================
     -- RAPTORS
     -- ==============================
     { "Raptor (Red)",          "Raptor",       3407,  "Creature\\Raptor\\Raptor.m2" },
-    { "Raptor (Green)",        "Raptor",       1129,  "Creature\\Raptor\\Raptor.m2" },
+    { "Raptor (Green)",        "Raptor",       1130,  "Creature\\Raptor\\Raptor.m2" },  -- Fixed: was 1129 (invalid)
     { "Raptor (Purple)",       "Raptor",       3143,  "Creature\\Raptor\\Raptor.m2" },
-    { "Raptor (White)",        "Raptor",       6642,  "Creature\\Raptor\\Raptor.m2" },
-    { "Raptor (Black)",        "Raptor",       2576,  "Creature\\Raptor\\Raptor.m2" },
+    { "Raptor (White)",        "Raptor",       6643,  "Creature\\Raptor\\Raptor.m2" },  -- Fixed: was 6642 (invalid)
+    { "Raptor (Black)",        "Raptor",       2577,  "Creature\\Raptor\\Raptor.m2" },  -- Fixed: was 2576 (invalid)
     { "Raptor (Orange)",       "Raptor",       14544, "Creature\\Raptor\\Raptor.m2" },
-    { "Outland Raptor",        "Raptor",       19371, "Creature\\Raptor\\Raptor.m2" },
+    { "Outland Raptor",	"Raptor",	19732, "Creature\\Raptor\\Raptor.m2" },
 
     -- ==============================
     -- SCORPIDS
     -- ==============================
-    { "Scorpid (Brown)",       "Scorpid",      1265,  "Creature\\Scorpid\\Scorpid.m2" },
-    { "Scorpid (Black)",       "Scorpid",      3126,  "Creature\\Scorpid\\Scorpid.m2" },
-    { "Scorpid (Red)",         "Scorpid",      2544,  "Creature\\Scorpid\\Scorpid.m2" },
-    { "Scorpid (White)",       "Scorpid",      7139,  "Creature\\Scorpid\\Scorpid.m2" },
+    { "Scorpid (Brown)",       "Scorpid",      1266,  "Creature\\Scorpid\\Scorpid.m2" },  -- Fixed: was 1265 (invalid)
+    { "Scorpid (Black)",       "Scorpid",      3127,  "Creature\\Scorpid\\Scorpid.m2" },  -- Fixed: was 3126 (invalid)
+    { "Scorpid (Red)",         "Scorpid",      2545,  "Creature\\Scorpid\\Scorpid.m2" },  -- Fixed: was 2544 (invalid)
+    { "Scorpid (White)",       "Scorpid",      7140,  "Creature\\Scorpid\\Scorpid.m2" },  -- Fixed: was 7139 (invalid)
     { "Outland Scorpid",       "Scorpid",      20339, "Creature\\Scorpid\\Scorpid.m2" },
 
     -- ==============================
@@ -118,14 +118,14 @@ ns.combatPetsDB = {
     { "Wind Serpent (Green)",   "Serpent",      2954,  "Creature\\WindSerpent\\WindSerpent.m2" },
     { "Wind Serpent (Blue)",    "Serpent",      2953,  "Creature\\WindSerpent\\WindSerpent.m2" },
     { "Wind Serpent (Red)",     "Serpent",      4381,  "Creature\\WindSerpent\\WindSerpent.m2" },
-    { "Wind Serpent (Yellow)",  "Serpent",      5328,  "Creature\\WindSerpent\\WindSerpent.m2" },
+    { "Wind Serpent (Yellow)",  "Serpent",      5329,  "Creature\\WindSerpent\\WindSerpent.m2" },  -- Fixed: was 5328 (invalid)
     { "Wind Serpent (White)",   "Serpent",      7094,  "Creature\\WindSerpent\\WindSerpent.m2" },
     { "Outland Wind Serpent",   "Serpent",      20111, "Creature\\WindSerpent\\WindSerpent.m2" },
 
     -- ==============================
     -- SPIDERS
     -- ==============================
-    { "Spider (Black)",        "Spider",       1107,  "Creature\\Spider\\Spider.m2" },
+    { "Spider (Black)",        "Spider",       1106,  "Creature\\Spider\\Spider.m2" },  -- Fixed: was 1107 (invalid)
     { "Spider (Red)",          "Spider",       1105,  "Creature\\Spider\\Spider.m2" },
     { "Spider (Green)",        "Spider",       1108,  "Creature\\Spider\\Spider.m2" },
     { "Spider (Brown)",        "Spider",       3251,  "Creature\\Spider\\Spider.m2" },
@@ -137,28 +137,28 @@ ns.combatPetsDB = {
     -- TALLSTRIDERS
     -- ==============================
     { "Tallstrider (Gray)",    "Tallstrider",  1379,  "Creature\\Tallstrider\\Tallstrider.m2" },
-    { "Tallstrider (Turquoise)","Tallstrider", 4712,  "Creature\\Tallstrider\\Tallstrider.m2" },
-    { "Tallstrider (Pink)",    "Tallstrider",  7391,  "Creature\\Tallstrider\\Tallstrider.m2" },
+    { "Tallstrider (Turquoise)",	"Tallstrider",	6478,  "Creature\\Tallstrider\\Tallstrider.m2" },
+    { "Tallstrider (Pink)",	"Tallstrider",	6476,  "Creature\\Tallstrider\\Tallstrider.m2" },
     { "Tallstrider (Green)",   "Tallstrider",  3011,  "Creature\\Tallstrider\\Tallstrider.m2" },
-    { "Tallstrider (Red)",     "Tallstrider",  3561,  "Creature\\Tallstrider\\Tallstrider.m2" },
+    { "Tallstrider (Red)",     "Tallstrider",  3562,  "Creature\\Tallstrider\\Tallstrider.m2" },  -- Fixed: was 3561 (invalid)
 
     -- ==============================
     -- TURTLES
     -- ==============================
-    { "Turtle (Green)",        "Turtle",       1424,  "Creature\\Turtle\\Turtle.m2" },
-    { "Turtle (Brown)",        "Turtle",       4722,  "Creature\\Turtle\\Turtle.m2" },
+    { "Turtle (Green)",        "Turtle",       1425,  "Creature\\Turtle\\Turtle.m2" },  -- Fixed: was 1424 (invalid)
+    { "Turtle (Brown)",        "Turtle",       4723,  "Creature\\Turtle\\Turtle.m2" },  -- Fixed: was 4722 (invalid)
     { "Turtle (Red)",          "Turtle",       7094,  "Creature\\Turtle\\Turtle.m2" },
     { "Turtle (Blue)",         "Turtle",       2424,  "Creature\\Turtle\\Turtle.m2" },
-    { "Outland Turtle",        "Turtle",       20156, "Creature\\Turtle\\Turtle.m2" },
+    { "Outland Turtle",        "Turtle",       20157, "Creature\\Turtle\\Turtle.m2" },  -- Fixed: was 20156 (invalid)
 
     -- ==============================
     -- WOLVES
     -- ==============================
     { "Wolf (Gray)",           "Wolf",         604,   "Creature\\Wolf\\Wolf.m2" },
     { "Wolf (Black)",          "Wolf",         2956,  "Creature\\Wolf\\Wolf.m2" },
-    { "Wolf (White)",          "Wolf",         611,   "Creature\\Wolf\\Wolf.m2" },
-    { "Wolf (Brown)",          "Wolf",         1137,  "Creature\\Wolf\\Wolf.m2" },
-    { "Wolf (Timber)",         "Wolf",         12255, "Creature\\Wolf\\Wolf.m2" },
+    { "Wolf (White)",          "Wolf",         610,   "Creature\\Wolf\\Wolf.m2" },  -- Fixed: was 611 (invalid)
+    { "Wolf (Brown)",          "Wolf",         1138,  "Creature\\Wolf\\Wolf.m2" },  -- Fixed: was 1137 (invalid)
+    { "Wolf (Timber)",         "Wolf",         12256, "Creature\\Wolf\\Wolf.m2" },  -- Fixed: was 12255 (invalid)
     { "Worg (Dark Iron)",      "Wolf",         903,   "Creature\\Worg\\Worg.m2" },
     { "Worg (Black)",          "Wolf",         1826,  "Creature\\Worg\\Worg.m2" },
     { "Worg (White)",          "Wolf",         26071, "Creature\\Worg\\Worg.m2" },
@@ -187,9 +187,9 @@ ns.combatPetsDB = {
     -- BATS
     -- ==============================
     { "Bat (Gray)",            "Bat",          2129,  "Creature\\Bat\\Bat.m2" },
-    { "Bat (Brown)",           "Bat",          10717, "Creature\\Bat\\Bat.m2" },
+    { "Bat (Brown)",           "Bat",          10718, "Creature\\Bat\\Bat.m2" },  -- Fixed: was 10717 (invalid)
     { "Bat (White)",           "Bat",          26081, "Creature\\Bat\\Bat.m2" },
-    { "Plagued Bat",           "Bat",          26013, "Creature\\Bat\\Bat.m2" },
+    { "Plagued Bat",           "Bat",          26014, "Creature\\Bat\\Bat.m2" },  -- Fixed: was 26013 (invalid)
     { "Vampire Bat",           "Bat",          14544, "Creature\\Bat\\Bat.m2" },
 
     -- ==============================
@@ -198,45 +198,45 @@ ns.combatPetsDB = {
     { "Vulture (Brown)",       "Carrion Bird", 1194,  "Creature\\Vulture\\Vulture.m2" },
     { "Vulture (Black)",       "Carrion Bird", 4235,  "Creature\\Vulture\\Vulture.m2" },
     { "Vulture (Red)",         "Carrion Bird", 4714,  "Creature\\Vulture\\Vulture.m2" },
-    { "Carrion Bird (Bone)",   "Carrion Bird", 26073, "Creature\\Vulture\\Vulture.m2" },
+    { "Carrion Bird (Bone)",   "Carrion Bird", 26074, "Creature\\Vulture\\Vulture.m2" },  -- Fixed: was 26073 (invalid)
     { "Outland Carrion Bird",  "Carrion Bird", 20365, "Creature\\Vulture\\Vulture.m2" },
 
     -- ==============================
     -- DRAGONHAWKS (TBC+)
     -- ==============================
     { "Dragonhawk (Red)",      "Dragonhawk",  20031, "Creature\\DragonHawk\\DragonHawk.m2" },
-    { "Dragonhawk (Blue)",     "Dragonhawk",  20035, "Creature\\DragonHawk\\DragonHawk.m2" },
-    { "Dragonhawk (Yellow)",   "Dragonhawk",  20032, "Creature\\DragonHawk\\DragonHawk.m2" },
+    { "Dragonhawk (Blue)",     "Dragonhawk",  20029, "Creature\\DragonHawk\\DragonHawk.m2" },  -- Fixed: was 20035 (invalid)
+    { "Dragonhawk (Yellow)",   "Dragonhawk",  20026, "Creature\\DragonHawk\\DragonHawk.m2" },  -- Fixed: was 20032 (invalid)
     { "Dragonhawk (Purple)",   "Dragonhawk",  20033, "Creature\\DragonHawk\\DragonHawk.m2" },
-    { "Dragonhawk (Green)",    "Dragonhawk",  20034, "Creature\\DragonHawk\\DragonHawk.m2" },
-    { "Dragonhawk (White)",    "Dragonhawk",  20036, "Creature\\DragonHawk\\DragonHawk.m2" },
+    { "Dragonhawk (Green)",    "Dragonhawk",  20028, "Creature\\DragonHawk\\DragonHawk.m2" },  -- Fixed: was 20034 (invalid)
+    { "Dragonhawk (White)",    "Dragonhawk",  20037, "Creature\\DragonHawk\\DragonHawk.m2" },  -- Fixed: was 20036 (invalid)
 
     -- ==============================
     -- NETHER RAYS (TBC+)
     -- ==============================
     { "Nether Ray (Purple)",   "Nether Ray",  21500, "Creature\\NetherRay\\NetherRay.m2" },
-    { "Nether Ray (Red)",      "Nether Ray",  21497, "Creature\\NetherRay\\NetherRay.m2" },
+    { "Nether Ray (Red)",      "Nether Ray",  21496, "Creature\\NetherRay\\NetherRay.m2" },  -- Fixed: was 21497 (invalid)
     { "Nether Ray (Blue)",     "Nether Ray",  21501, "Creature\\NetherRay\\NetherRay.m2" },
-    { "Nether Ray (Green)",    "Nether Ray",  21498, "Creature\\NetherRay\\NetherRay.m2" },
+    { "Nether Ray (Green)",    "Nether Ray",  21499, "Creature\\NetherRay\\NetherRay.m2" },  -- Fixed: was 21498 (invalid)
     { "Nether Ray (Silver)",   "Nether Ray",  21503, "Creature\\NetherRay\\NetherRay.m2" },
 
     -- ==============================
     -- RAVAGERS (TBC+)
     -- ==============================
-    { "Ravager (Red)",         "Ravager",      17377, "Creature\\Ravager\\Ravager.m2" },
+    { "Ravager (Red)",         "Ravager",      17378, "Creature\\Ravager\\Ravager.m2" },  -- Fixed: was 17377 (invalid)
     { "Ravager (Orange)",      "Ravager",      20063, "Creature\\Ravager\\Ravager.m2" },
     { "Ravager (Green)",       "Ravager",      20064, "Creature\\Ravager\\Ravager.m2" },
-    { "Ravager (White)",       "Ravager",      20065, "Creature\\Ravager\\Ravager.m2" },
+    { "Ravager (White)",       "Ravager",      20066, "Creature\\Ravager\\Ravager.m2" },  -- Fixed: was 20065 (invalid)
     { "Ravager (Blue)",        "Ravager",      20062, "Creature\\Ravager\\Ravager.m2" },
 
     -- ==============================
     -- SPOREBATS (TBC+)
     -- ==============================
     { "Sporebat (Purple)",     "Sporebat",     17831, "Creature\\Sporebat\\Sporebat.m2" },
-    { "Sporebat (Red)",        "Sporebat",     20378, "Creature\\Sporebat\\Sporebat.m2" },
-    { "Sporebat (Blue)",       "Sporebat",     20379, "Creature\\Sporebat\\Sporebat.m2" },
-    { "Sporebat (Yellow)",     "Sporebat",     20380, "Creature\\Sporebat\\Sporebat.m2" },
-    { "Sporebat (White)",      "Sporebat",     20382, "Creature\\Sporebat\\Sporebat.m2" },
+    { "Sporebat (Red)",        "Sporebat",     20377, "Creature\\Sporebat\\Sporebat.m2" },  -- Fixed: was 20378 (invalid)
+    { "Sporebat (Blue)",       "Sporebat",     20376, "Creature\\Sporebat\\Sporebat.m2" },  -- Fixed: was 20379 (invalid)
+    { "Sporebat (Yellow)",     "Sporebat",     20381, "Creature\\Sporebat\\Sporebat.m2" },  -- Fixed: was 20380 (invalid)
+    { "Sporebat (White)",      "Sporebat",     20383, "Creature\\Sporebat\\Sporebat.m2" },  -- Fixed: was 20382 (invalid)
 
     -- ==============================
     -- WARP STALKERS (TBC+)
@@ -250,16 +250,16 @@ ns.combatPetsDB = {
     -- ==============================
     -- MOTHS (TBC+)
     -- ==============================
-    { "Moth (White)",          "Moth",         20667, "Creature\\Moth\\Moth.m2" },
-    { "Moth (Yellow)",         "Moth",         20668, "Creature\\Moth\\Moth.m2" },
-    { "Moth (Blue)",           "Moth",         20669, "Creature\\Moth\\Moth.m2" },
+    { "Moth (White)",          "Moth",         20666, "Creature\\Moth\\Moth.m2" },  -- Fixed: was 20667 (invalid)
+    { "Moth (Yellow)",         "Moth",         19985, "Creature\\Moth\\Moth.m2" },  -- Fixed: was 20668 (invalid)
+    { "Moth (Blue)",           "Moth",         19987, "Creature\\Moth\\Moth.m2" },  -- Fixed: was 20669 (invalid)
     { "Moth (Red)",            "Moth",         20670, "Creature\\Moth\\Moth.m2" },
     { "Moth (Green)",          "Moth",         20671, "Creature\\Moth\\Moth.m2" },
 
     -- ==============================
     -- WASPS (TBC+)
     -- ==============================
-    { "Wasp (Yellow)",         "Wasp",         18283, "Creature\\Wasp\\Wasp.m2" },
+    { "Wasp (Yellow)",         "Wasp",         18284, "Creature\\Wasp\\Wasp.m2" },  -- Fixed: was 18283 (invalid)
     { "Wasp (Red)",            "Wasp",         20585, "Creature\\Wasp\\Wasp.m2" },
     { "Wasp (Blue)",           "Wasp",         20584, "Creature\\Wasp\\Wasp.m2" },
     { "Wasp (Green)",          "Wasp",         20586, "Creature\\Wasp\\Wasp.m2" },
@@ -271,7 +271,7 @@ ns.combatPetsDB = {
     { "Snake (Brown)",         "Snake",        5165,  "Creature\\Snake\\Snake.m2" },
     { "Snake (Black)",         "Snake",        6303,  "Creature\\Snake\\Snake.m2" },
     { "Snake (Red)",           "Snake",        14544, "Creature\\Snake\\Snake.m2" },
-    { "Cobra",                 "Snake",        20577, "Creature\\Cobra\\Cobra.m2" },
+    { "Cobra",	"Snake",	4213, "Creature\\Cobra\\Cobra.m2" },
     { "King Cobra",            "Snake",        20578, "Creature\\Cobra\\Cobra.m2" },
 
     -- ==============================
@@ -279,7 +279,7 @@ ns.combatPetsDB = {
     -- ==============================
     { "Chimera (Blue)",        "Chimera",      25511, "Creature\\HydraMount\\HydraMount.m2" },
     { "Chimera (Green)",       "Chimera",      26360, "Creature\\HydraMount\\HydraMount.m2" },
-    { "Chimera (Red)",         "Chimera",      26316, "Creature\\HydraMount\\HydraMount.m2" },
+    { "Chimera (Red)",         "Chimera",      26317, "Creature\\HydraMount\\HydraMount.m2" },  -- Fixed: was 26316 (invalid)
     { "Chimera (White)",       "Chimera",      26361, "Creature\\HydraMount\\HydraMount.m2" },
     { "Chimera (Purple)",      "Chimera",      26359, "Creature\\HydraMount\\HydraMount.m2" },
 
@@ -287,7 +287,7 @@ ns.combatPetsDB = {
     -- CORE HOUNDS (Exotic — BM only)
     -- ==============================
     { "Core Hound (Orange)",   "Core Hound",   10813, "Creature\\CoreHound\\CoreHound.m2" },
-    { "Core Hound (Black)",    "Core Hound",   10956, "Creature\\CoreHound\\CoreHound.m2" },
+    { "Core Hound (Black)",    "Core Hound",   10957, "Creature\\CoreHound\\CoreHound.m2" },  -- Fixed: was 10956 (invalid)
     { "Core Hound (Purple)",   "Core Hound",   27347, "Creature\\CoreHound\\CoreHound.m2" },
     { "Core Hound (Kurken)",   "Core Hound",   18162, "Creature\\CoreHound\\CoreHound.m2" },
     { "Magmadar",              "Core Hound",   10193, "Creature\\CoreHound\\CoreHound.m2" },
@@ -298,7 +298,7 @@ ns.combatPetsDB = {
     { "Devilsaur (Green)",     "Devilsaur",    7345,  "Creature\\Devilsaur\\Devilsaur.m2" },
     { "Devilsaur (Black)",     "Devilsaur",    8029,  "Creature\\Devilsaur\\Devilsaur.m2" },
     { "King Krush",            "Devilsaur",    26650, "Creature\\Devilsaur\\Devilsaur.m2" },
-    { "Devilsaur (White)",     "Devilsaur",    26648, "Creature\\Devilsaur\\Devilsaur.m2" },
+    { "Devilsaur (White)",     "Devilsaur",    26649, "Creature\\Devilsaur\\Devilsaur.m2" },  -- Fixed: was 26648 (invalid)
 
     -- ==============================
     -- SILITHIDS (Exotic — BM only)
@@ -306,7 +306,7 @@ ns.combatPetsDB = {
     { "Silithid (Green)",      "Silithid",     8311,  "Creature\\SilithidTank\\SilithidTank.m2" },
     { "Silithid (Red)",        "Silithid",     8314,  "Creature\\SilithidTank\\SilithidTank.m2" },
     { "Silithid (Blue)",       "Silithid",     8309,  "Creature\\SilithidTank\\SilithidTank.m2" },
-    { "Silithid (Black)",      "Silithid",     15122, "Creature\\SilithidTank\\SilithidTank.m2" },
+    { "Silithid (Black)",      "Silithid",     15123, "Creature\\SilithidTank\\SilithidTank.m2" },  -- Fixed: was 15122 (invalid)
 
     -- ==============================
     -- SPIRIT BEASTS (Exotic — BM only, WotLK)
@@ -330,9 +330,9 @@ ns.combatPetsDB = {
     -- RHINOS (Exotic — BM only, WotLK)
     -- ==============================
     { "Rhino (Gray)",          "Rhino",        24758, "Creature\\Rhino\\Rhino.m2" },
-    { "Rhino (Brown)",         "Rhino",        25360, "Creature\\Rhino\\Rhino.m2" },
-    { "Rhino (White)",         "Rhino",        25361, "Creature\\Rhino\\Rhino.m2" },
-    { "Rhino (Black)",         "Rhino",        25362, "Creature\\Rhino\\Rhino.m2" },
+    { "Rhino (Brown)",         "Rhino",        25359, "Creature\\Rhino\\Rhino.m2" },  -- Fixed: was 25360 (invalid)
+    { "Rhino (White)",         "Rhino",        24759, "Creature\\Rhino\\Rhino.m2" },  -- Fixed: was 25361 (invalid)
+    { "Rhino (Black)",         "Rhino",        24760, "Creature\\Rhino\\Rhino.m2" },  -- Fixed: was 25362 (invalid)
 
     -- ==============================
     -- CROCOLISKS (Northrend)
@@ -350,14 +350,14 @@ ns.combatPetsDB = {
     { "Northrend Worg (Brown)","Wolf",         26062, "Creature\\Worg\\Worg.m2" },
     { "Northrend Worg (Red)",  "Wolf",         26063, "Creature\\Worg\\Worg.m2" },
     { "Northrend Worg (Black)","Wolf",         26064, "Creature\\Worg\\Worg.m2" },
-    { "Northrend Wolf (Black)","Wolf",         26060, "Creature\\Wolf\\Wolf.m2" },
-    { "Northrend Wolf (White)","Wolf",         26068, "Creature\\Wolf\\Wolf.m2" },
+    { "Northrend Wolf (Black)","Wolf",         26061, "Creature\\Wolf\\Wolf.m2" },  -- Fixed: was 26060 (invalid)
+    { "Northrend Wolf (White)","Wolf",         26069, "Creature\\Wolf\\Wolf.m2" },  -- Fixed: was 26068 (invalid)
 
     -- ==============================
     -- BEARS (Northrend)
     -- ==============================
-    { "Northrend Bear (Black)","Bear",         29414, "Creature\\Bear2\\Bear2.m2" },
-    { "Northrend Bear (White)","Bear",         26647, "Creature\\Bear2\\Bear2.m2" },
+    { "Northrend Bear (Black)","Bear",         29415, "Creature\\Bear2\\Bear2.m2" },  -- Fixed: was 29414 (invalid)
+    { "Northrend Bear (White)","Bear",         26646, "Creature\\Bear2\\Bear2.m2" },  -- Fixed: was 26647 (invalid)
 
     -- ==============================
     -- CATS (Northrend)
@@ -368,34 +368,34 @@ ns.combatPetsDB = {
     -- ==============================
     -- RAPTORS (Northrend)
     -- ==============================
-    { "Northrend Raptor",      "Raptor",       26203, "Creature\\Raptor\\Raptor.m2" },
+    { "Northrend Raptor",      "Raptor",       26204, "Creature\\Raptor\\Raptor.m2" },  -- Fixed: was 26203 (invalid)
 
     -- ==============================
     -- SPIDERS (Northrend)
     -- ==============================
-    { "Northrend Spider (White)","Spider",     26048, "Creature\\Spider\\Spider.m2" },
-    { "Northrend Spider (Black)","Spider",     26049, "Creature\\Spider\\Spider.m2" },
+    { "Northrend Spider (White)","Spider",     26047, "Creature\\Spider\\Spider.m2" },  -- Fixed: was 26048 (invalid)
+    { "Northrend Spider (Black)","Spider",     26050, "Creature\\Spider\\Spider.m2" },  -- Fixed: was 26049 (invalid)
 
     -- ==============================
     -- WASPS (Northrend)
     -- ==============================
-    { "Northrend Wasp",        "Wasp",         25863, "Creature\\Wasp\\Wasp.m2" },
+    { "Northrend Wasp",        "Wasp",         25864, "Creature\\Wasp\\Wasp.m2" },  -- Fixed: was 25863 (invalid)
 
     -- ==============================
     -- MOTHS (Northrend)
     -- ==============================
-    { "Northrend Moth",        "Moth",         25858, "Creature\\Moth\\Moth.m2" },
+    { "Northrend Moth",        "Moth",         25859, "Creature\\Moth\\Moth.m2" },  -- Fixed: was 25858 (invalid)
 
     -- ==============================
     -- MISCELLANEOUS TAMEABLE
     -- ==============================
-    { "Scorpid (Northrend)",   "Scorpid",      26029, "Creature\\Scorpid\\Scorpid.m2" },
-    { "Tallstrider (Northrend)","Tallstrider",  26091, "Creature\\Tallstrider\\Tallstrider.m2" },
-    { "Turtle (Northrend)",    "Turtle",       26082, "Creature\\Turtle\\Turtle.m2" },
-    { "Crab (Northrend)",      "Crab",         25997, "Creature\\Crab\\Crab.m2" },
-    { "Bat (Northrend)",       "Bat",          26012, "Creature\\Bat\\Bat.m2" },
-    { "Carrion Bird (Northrend)","Carrion Bird",26075,"Creature\\Vulture\\Vulture.m2" },
-    { "Dragonhawk (Northrend)","Dragonhawk",   26669, "Creature\\DragonHawk\\DragonHawk.m2" },
+    { "Scorpid (Northrend)",   "Scorpid",      26030, "Creature\\Scorpid\\Scorpid.m2" },  -- Fixed: was 26029 (invalid)
+    { "Tallstrider (Northrend)","Tallstrider",  26092, "Creature\\Tallstrider\\Tallstrider.m2" },  -- Fixed: was 26091 (invalid)
+    { "Turtle (Northrend)",    "Turtle",       26083, "Creature\\Turtle\\Turtle.m2" },  -- Fixed: was 26082 (invalid)
+    { "Crab (Northrend)",      "Crab",         25998, "Creature\\Crab\\Crab.m2" },  -- Fixed: was 25997 (invalid)
+    { "Bat (Northrend)",       "Bat",          26011, "Creature\\Bat\\Bat.m2" },  -- Fixed: was 26012 (invalid)
+    { "Carrion Bird (Northrend)","Carrion Bird",26076,"Creature\\Vulture\\Vulture.m2" },  -- Fixed: was 26075 (invalid)
+    { "Dragonhawk (Northrend)","Dragonhawk",   26670, "Creature\\DragonHawk\\DragonHawk.m2" },  -- Fixed: was 26669 (invalid)
 
     -- ==============================
     -- WARLOCK DEMONS
@@ -419,7 +419,7 @@ ns.combatPetsDB = {
     -- ==============================
     { "Water Elemental",       "Mage",         525,   "Creature\\WaterElemental\\WaterElemental.m2", 510 },
     { "Water Elemental (Large)","Mage",        5765,  "Creature\\WaterElemental\\WaterElemental.m2" },
-    { "Water Elemental (Glacial)","Mage",      28231, "Creature\\WaterElemental\\WaterElemental.m2" },
+    { "Water Elemental (Glacial)","Mage",      28232, "Creature\\WaterElemental\\WaterElemental.m2" },  -- Fixed: was 28231 (invalid)
     { "Frost Elemental",       "Mage",         26428, "Creature\\FrostElemental\\FrostElemental.m2" },
     { "Bound Water Elemental", "Mage",         16942, "Creature\\WaterElemental\\WaterElemental.m2" },
 }
