@@ -7,13 +7,6 @@ The addon allows players to locally modify their visual appearance without affec
 Transmorpher provides a powerful interface for customizing character appearance, equipment visuals, mounts, pets, and other cosmetic elements.
 
 ---
-![Screenshot](images/screenshot1.png)
-
-## Morph System
-
-![Screenshot](images/Capture%20d'écran%202026-03-04%20132233.png)
-
-![Screenshot](images/Capture%20d'écran%202026-03-04%20132756.png)
 
 # Features
 
@@ -78,6 +71,15 @@ Current release: **1.1.1**
 - World of Warcraft **Wrath of the Lich King 3.3.5a**
 - Client-side only functionality
 - Does not modify server data
+
+  
+![Screenshot](images/screenshot1.png)
+
+## Morph System
+
+![Screenshot](images/Capture%20d'écran%202026-03-04%20132233.png)
+
+![Screenshot](images/Capture%20d'écran%202026-03-04%20132756.png)
 
 ![Screenshot](images/Capture%20d'écran%202026-03-04%20132847.png)
 
