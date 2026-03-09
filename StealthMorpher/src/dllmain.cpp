@@ -1241,8 +1241,16 @@ static bool DoMorph(const char* cmd, WowObject* player) {
             *(uint32_t*)(desc + PLAYER_FIELD_CHOSEN_TITLE) = g_origTitle;
             // Restore known bit
             SetTitleKnown(player, g_morphTitle, g_origTitleWasKnown);
+
+            // Sync UI to original title (prevents "hidden name" bug)
+            char luaCmd[128];
+            if (g_origTitle > 0) {
+                sprintf_s(luaCmd, "if SetCurrentTitle then SetCurrentTitle(%u) end", g_origTitle);
+            } else {
+                sprintf_s(luaCmd, "if SetCurrentTitle then SetCurrentTitle(-1) end"); // -1 or 0 usually clears
+            }
+            FrameScript_Execute(luaCmd, "Transmorpher", 0);
         }
-        FrameScript_Execute("if SetCurrentTitle then SetCurrentTitle(0) end", "Transmorpher", 0);
         FrameScript_Execute("if PaperDollTitlesPane_Update then PaperDollTitlesPane_Update() end", "Transmorpher", 0);
         g_morphTitle = 0;
         g_origTitle = 0;

@@ -1,6 +1,6 @@
 local addon, ns = ...
 
-local mainFrameTitle = "|cffF5C842Transmorpher|r  |cff6a6050v1.1.1|r"
+local mainFrameTitle = "|cffF5C842Transmorpher|r  |cff6a6050v1.1.2|r"
 
 -- ============================================================
 -- CUSTOM GOLDEN BUTTON STYLE
@@ -1589,6 +1589,10 @@ local function slot_OnLeftClick(self)
     if mainFrame.buttons["tab1"] then
         tab_OnClick(mainFrame.buttons["tab1"])
     end
+    -- Explicitly force Items sub-tab (in case Sets was active)
+    if mainFrame.tabs.preview.ShowSubTab then
+        mainFrame.tabs.preview.ShowSubTab(1)
+    end
     -- Switch to Preview tab and show the item
     if self.itemId ~= nil then
         -- Try to find the item in the DB and update preview
@@ -2390,6 +2394,8 @@ end)
 btnSets:SetScript("OnClick", function()
     ShowPreviewSubTab(2)
 end)
+
+mainFrame.tabs.preview.ShowSubTab = ShowPreviewSubTab
 
 ShowPreviewSubTab(1)
 
@@ -6323,7 +6329,7 @@ do
     infoText:SetJustifyH("LEFT")
     infoText:SetJustifyV("TOP")
     infoText:SetTextColor(0.95, 0.88, 0.65)
-    infoText:SetText("Transmorpher v1.1.1\n\nA client-side transmog system for WotLK 3.3.5a.\nTransform your character appearance, equipment, mounts, and pets.\nRequires dinput8.dll to function.\n\nLatest Update Changelog\n- Fixed all Hunter combat pet IDs\n- Fixed morph size not resetting when switching to another morph\n- Fixed Interact with Mouseover / Interact with Target keybinds becoming dysfunctional while addon is enabled\n- Fixed Hide Equipment not persistent when applying a new item\n- Added a new Sets system containing all 3.3.5 class sets (441 sets)\n- Added morph scale and pet scale to loadout saves\n- Added time control for day/night time\n- Added title morphing")
+    infoText:SetText("Transmorpher v1.1.2\n\nA client-side transmog system for WotLK 3.3.5a.\nTransform your character appearance, equipment, mounts, and pets.\nRequires dinput8.dll to function.\n\nLatest Update Changelog\n- Fixed Title Morph system bugs (hidden name, reset issues)\n- Fixed Misc tab UI bugs (Time/Title sections overlap)\n- Fixed Dressing Room slot click navigation (always goes to Items tab)\n- Fixed Sets tab interaction issues\n- Improved Title Morph reset logic in DLL")
     
     yOffset = yOffset - 270
     
@@ -6333,57 +6339,74 @@ end
 
 ---------------- TIME TAB ----------------
 
+---------------- TIME & TITLE TAB (REBUILT) ----------------
+
 do
     local envTab = mainFrame.tabs.env
     
-    -- Create a scrollable content area
-    local scrollFrame = CreateFrame("ScrollFrame", "$parentEnvScroll", envTab, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", 8, -8)
-    scrollFrame:SetPoint("BOTTOMRIGHT", -28, 8)
+    -- 1. Main Scroll Frame (Outer Container)
+    -- Using explicit strata to avoid overlap issues
+    local outerScroll = CreateFrame("ScrollFrame", "$parentEnvScroll", envTab, "UIPanelScrollFrameTemplate")
+    outerScroll:SetPoint("TOPLEFT", 10, -10)
+    outerScroll:SetPoint("BOTTOMRIGHT", -30, 10)
+    outerScroll:SetFrameStrata("MEDIUM")
+    outerScroll:SetFrameLevel(envTab:GetFrameLevel() + 5)
     
-    local scrollChild = CreateFrame("Frame", nil, scrollFrame)
-    scrollChild:SetSize(scrollFrame:GetWidth(), 1)
-    scrollFrame:SetScrollChild(scrollChild)
+    -- 2. Scroll Child (Content Holder)
+    local content = CreateFrame("Frame", nil, outerScroll)
+    content:SetSize(outerScroll:GetWidth(), 500)
+    content:SetFrameStrata("MEDIUM")
+    content:SetFrameLevel(outerScroll:GetFrameLevel() + 5)
+    outerScroll:SetScrollChild(content)
     
-    local yOffset = -16
-    
-    local function createSectionHeader(parent, title, y)
-        local header = CreateFrame("Frame", nil, parent)
-        header:SetPoint("TOPLEFT", 6, y)
-        header:SetSize(parent:GetWidth() - 12, 28)
+    -- Header Helper
+    local function CreateHeader(parent, text, yOff)
+        local h = CreateFrame("Frame", nil, parent)
+        h:SetSize(parent:GetWidth() - 5, 26)
+        h:SetPoint("TOPLEFT", 0, yOff)
         
-        -- Background
-        header:SetBackdrop({
+        h:SetBackdrop({
             bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
             edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
             tile = true, tileSize = 16, edgeSize = 12,
             insets = { left = 3, right = 3, top = 3, bottom = 3 }
         })
-        header:SetBackdropColor(0.12, 0.10, 0.06, 0.8)
-        header:SetBackdropBorderColor(0.80, 0.65, 0.22, 0.6)
+        h:SetBackdropColor(0.15, 0.12, 0.08, 0.95)
+        h:SetBackdropBorderColor(0.6, 0.5, 0.2, 0.8)
         
-        local text = header:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-        text:SetPoint("LEFT", 10, 0)
-        text:SetText(title)
-        text:SetTextColor(1.0, 0.82, 0.20)
-        
-        return header
+        local fs = h:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        fs:SetPoint("LEFT", 10, 0)
+        fs:SetText(text)
+        fs:SetTextColor(1, 0.82, 0)
+        return h
     end
     
-    -- Time Control Section
-    createSectionHeader(scrollChild, "Time Control", yOffset)
-    yOffset = yOffset - 40
+    -- ================= TIME CONTROL SECTION =================
+    local timeY = 0
+    local timeHeader = CreateHeader(content, "Time Control", timeY)
     
-    -- Time Slider
-    local sliderLabel = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    sliderLabel:SetPoint("TOPLEFT", 20, yOffset)
-    sliderLabel:SetText("Time of Day (Hours):")
+    local timeSection = CreateFrame("Frame", nil, content)
+    timeSection:SetPoint("TOPLEFT", 0, timeY - 30)
+    timeSection:SetSize(content:GetWidth(), 100)
+    timeSection:SetFrameStrata("MEDIUM")
+    timeSection:SetFrameLevel(content:GetFrameLevel() + 5)
     
-    local slider = CreateFrame("Slider", "$parentTimeSlider", scrollChild, "OptionsSliderTemplate")
-    slider:SetPoint("LEFT", sliderLabel, "RIGHT", 20, 0)
-    slider:SetWidth(200)
-    slider:SetHeight(20)
+    local slider = CreateFrame("Slider", "$parentTimeSlider", timeSection, "OptionsSliderTemplate")
+    slider:SetPoint("TOPLEFT", 20, -10)
+    slider:SetWidth(240)
+    slider:SetHeight(18)
     slider:SetMinMaxValues(0.0, 24.0)
+    slider:SetValueStep(0.5)
+    
+    _G[slider:GetName().."Low"]:SetText("Midnight")
+    _G[slider:GetName().."High"]:SetText("Midnight")
+    _G[slider:GetName().."Text"]:SetText("Noon")
+    
+    slider:SetScript("OnValueChanged", function(self, value)
+        local hour = math.floor(value)
+        local minute = math.floor((value - hour) * 60)
+        _G[self:GetName().."Text"]:SetText(string.format("%02d:%02d", hour, minute))
+    end)
     
     slider:SetScript("OnShow", function(self)
         if TransmorpherCharacterState and TransmorpherCharacterState.WorldTime then
@@ -6391,216 +6414,153 @@ do
         else
             self:SetValue(12.0)
         end
-        local v = math.floor(self:GetValue() * 10) / 10
-        _G[self:GetName().."Text"]:SetText(tostring(v))
-    end)
-
-    if TransmorpherCharacterState and TransmorpherCharacterState.WorldTime then
-        slider:SetValue(TransmorpherCharacterState.WorldTime * 24.0)
-    else
-        slider:SetValue(12.0) -- Default to Noon
-    end
-    
-    slider:SetValueStep(0.5)
-    _G[slider:GetName().."Low"]:SetText("0")
-    _G[slider:GetName().."High"]:SetText("24")
-    _G[slider:GetName().."Text"]:SetText(tostring(math.floor(slider:GetValue() * 10) / 10))
-    
-    slider:SetScript("OnValueChanged", function(self, value)
-        local v = math.floor(value * 10) / 10
-        _G[self:GetName().."Text"]:SetText(tostring(v))
     end)
     
-    yOffset = yOffset - 50
-    
-    -- Buttons
-    local btnApply = CreateGoldenButton("$parentApplyTime", scrollChild)
-    btnApply:SetPoint("TOPLEFT", 20, yOffset)
-    btnApply:SetSize(140, 24)
-    btnApply:SetText("Apply & Save")
-    
-    btnApply:SetScript("OnClick", function()
-        local hours = slider:GetValue()
-        -- Convert 0-24 hours to 0.0-1.0 float
-        local timeVal = hours / 24.0
-        
+    local btnApplyTime = CreateGoldenButton("$parentApplyTime", timeSection)
+    btnApplyTime:SetPoint("TOPLEFT", slider, "BOTTOMLEFT", 0, -20)
+    btnApplyTime:SetSize(100, 22)
+    btnApplyTime:SetText("Apply")
+    btnApplyTime:SetScript("OnClick", function()
+        local val = slider:GetValue() / 24.0
         if IsMorpherReady() then
-            SendMorphCommand("TIME:" .. timeVal)
+            SendMorphCommand("TIME:" .. val)
             if not TransmorpherCharacterState then TransmorpherCharacterState = {} end
-            TransmorpherCharacterState.WorldTime = timeVal
-            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Time set to " .. hours .. ":00 (Saved per-character)")
-        else
-            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: |cffff0000DLL not loaded!|r")
+            TransmorpherCharacterState.WorldTime = val
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Time updated.")
         end
         PlaySound("gsTitleOptionOK")
     end)
     
-    local btnReset = CreateGoldenButton("$parentResetTime", scrollChild)
-    btnReset:SetPoint("LEFT", btnApply, "RIGHT", 10, 0)
-    btnReset:SetSize(140, 24)
-    btnReset:SetText("Reset Time")
-    
-    btnReset:SetScript("OnClick", function()
+    local btnResetTime = CreateGoldenButton("$parentResetTime", timeSection)
+    btnResetTime:SetPoint("LEFT", btnApplyTime, "RIGHT", 10, 0)
+    btnResetTime:SetSize(100, 22)
+    btnResetTime:SetText("Reset")
+    btnResetTime:SetScript("OnClick", function()
         if IsMorpherReady() then
-            SendMorphCommand("TIME:-1") -- Negative value triggers reset/uninstall hook
+            SendMorphCommand("TIME:-1")
             if TransmorpherCharacterState then TransmorpherCharacterState.WorldTime = nil end
-            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Time control disabled (Game time restored).")
+            slider:SetValue(12.0)
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Time reset to server default.")
         end
         PlaySound("gsTitleOptionOK")
     end)
     
-    yOffset = yOffset - 50
+    -- ================= TITLE MORPH SECTION =================
+    local titleY = -140
+    local titleHeader = CreateHeader(content, "Title Morph", titleY)
     
-    -- Info Text
-    local infoText = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    infoText:SetPoint("TOPLEFT", 20, yOffset)
-    infoText:SetWidth(scrollChild:GetWidth() - 40)
-    infoText:SetJustifyH("LEFT")
-    infoText:SetText("Note: This overrides the client's local time of day. 0 = Midnight, 12 = Noon.\nSaved settings are automatically applied on login.")
+    local titleSection = CreateFrame("Frame", nil, content)
+    titleSection:SetPoint("TOPLEFT", 0, titleY - 30)
+    titleSection:SetSize(content:GetWidth(), 300)
+    titleSection:SetFrameStrata("MEDIUM")
+    titleSection:SetFrameLevel(content:GetFrameLevel() + 5)
     
-    yOffset = yOffset - 60
-
-    -- Title Morph Section
-    createSectionHeader(scrollChild, "Title Morph", yOffset)
-    yOffset = yOffset - 40
-
-    local titleSearch = CreateFrame("EditBox", "$parentTitleSearch", scrollChild, "InputBoxTemplate")
-    titleSearch:SetPoint("TOPLEFT", 25, yOffset)
-    titleSearch:SetSize(180, 20)
-    titleSearch:SetAutoFocus(false)
-    titleSearch:SetTextInsets(6, 6, 0, 0)
-    titleSearch:SetFontObject("ChatFontNormal")
-    titleSearch:SetFrameStrata("DIALOG")
-    titleSearch:SetFrameLevel(scrollChild:GetFrameLevel() + 20)
+    local searchBox = CreateFrame("EditBox", "$parentTitleSearch", titleSection, "InputBoxTemplate")
+    searchBox:SetPoint("TOPLEFT", 20, 0)
+    searchBox:SetSize(180, 22)
+    searchBox:SetAutoFocus(false)
+    searchBox:SetFontObject("ChatFontNormal")
+    searchBox:SetTextInsets(6, 6, 0, 0)
     
-    local searchLabel = titleSearch:CreateFontString(nil, "ARTWORK", "GameFontDisable")
-    searchLabel:SetPoint("LEFT", 6, 0)
-    searchLabel:SetText("Search Titles...")
+    local searchHint = searchBox:CreateFontString(nil, "ARTWORK", "GameFontDisable")
+    searchHint:SetPoint("LEFT", 8, 0)
+    searchHint:SetText("Search titles...")
     
-    titleSearch:SetScript("OnEditFocusGained", function(self) searchLabel:Hide() end)
-    titleSearch:SetScript("OnEditFocusLost", function(self) 
-        if self:GetText() == "" then searchLabel:Show() end 
+    searchBox:SetScript("OnEditFocusGained", function(self) searchHint:Hide() end)
+    searchBox:SetScript("OnEditFocusLost", function(self)
+        if self:GetText() == "" then searchHint:Show() end
     end)
-    titleSearch:SetScript("OnEscapePressed", function(self)
-        self:ClearFocus()
-    end)
-
-    local btnClearSearch = CreateGoldenButton("$parentClearTitleSearch", scrollChild)
-    btnClearSearch:SetPoint("LEFT", titleSearch, "RIGHT", 8, 0)
-    btnClearSearch:SetSize(80, 22)
-    btnClearSearch:SetText("Clear")
-    btnClearSearch:SetFrameStrata("DIALOG")
-    btnClearSearch:SetFrameLevel(scrollChild:GetFrameLevel() + 20)
+    searchBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
     
-    -- Title List Scroll Frame
-    local listFrame = CreateFrame("ScrollFrame", "$parentTitleList", scrollChild, "UIPanelScrollFrameTemplate")
-    listFrame:SetPoint("TOPLEFT", 20, yOffset - 30)
-    listFrame:SetSize(280, 170)
-    listFrame:SetFrameStrata("DIALOG")
-    listFrame:SetFrameLevel(scrollChild:GetFrameLevel() + 10)
+    local btnClear = CreateGoldenButton("$parentTitleClear", titleSection)
+    btnClear:SetPoint("LEFT", searchBox, "RIGHT", 5, 0)
+    btnClear:SetSize(60, 22)
+    btnClear:SetText("Clear")
     
-    local listContent = CreateFrame("Frame", nil, listFrame)
-    listContent:SetSize(280, 1)
-    listFrame:SetScrollChild(listContent)
-    
-    -- Background for list
-    local listBg = CreateFrame("Frame", nil, listFrame)
-    listBg:SetPoint("TOPLEFT", -5, 5)
-    listBg:SetPoint("BOTTOMRIGHT", 25, -5)
-    listBg:SetBackdrop({
+    -- List Container (Background)
+    local listContainer = CreateFrame("Frame", nil, titleSection)
+    listContainer:SetPoint("TOPLEFT", 20, -30)
+    listContainer:SetSize(280, 200)
+    listContainer:SetBackdrop({
         bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
         tile = true, tileSize = 16, edgeSize = 12,
         insets = { left = 3, right = 3, top = 3, bottom = 3 }
     })
-    listBg:SetBackdropColor(0, 0, 0, 0.5)
-    listBg:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
-    listBg:SetFrameLevel(listFrame:GetFrameLevel() - 1)
-    listBg:EnableMouse(false)
+    listContainer:SetBackdropColor(0, 0, 0, 0.4)
+    listContainer:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
     
-    local titleButtons = {}
-    local function SanitizeTitleName(rawName)
-        local name = (rawName or ""):gsub("%%s", ""):gsub("^%s+", ""):gsub("%s+$", "")
-        if name == "" then
-            name = rawName or ""
-        end
-        return name
-    end
-
-    local function UpdateTitleList(filter)
-        -- Hide all buttons
-        for _, btn in pairs(titleButtons) do btn:Hide() end
-        
-        if not Transmorpher_Titles then return end
-        
-        local index = 0
-        local btnHeight = 22
+    -- Inner List Scroll
+    local listScroll = CreateFrame("ScrollFrame", "$parentTitleListScroll", listContainer, "UIPanelScrollFrameTemplate")
+    listScroll:SetPoint("TOPLEFT", 5, -5)
+    listScroll:SetPoint("BOTTOMRIGHT", -26, 5)
+    
+    local listContent = CreateFrame("Frame", nil, listScroll)
+    listContent:SetSize(240, 1)
+    listScroll:SetScrollChild(listContent)
+    
+    local titleBtns = {}
+    local function UpdateTitles(filter)
+        for _, b in pairs(titleBtns) do b:Hide() end
         local needle = (filter or ""):lower()
+        local y = 0
+        local h = 20
         
-        for _, titleData in ipairs(Transmorpher_Titles) do
-            local name = SanitizeTitleName(titleData.name)
-            
-            if needle == "" or name:lower():find(needle, 1, true) then
-                index = index + 1
+        if Transmorpher_Titles then
+            for _, t in ipairs(Transmorpher_Titles) do
+                local name = t.name:gsub("%%s", ""):gsub("^%s+", ""):gsub("%s+$", "")
+                if name == "" then name = t.name end
                 
-                local btn = titleButtons[index]
-                if not btn then
-                    btn = CreateFrame("Button", nil, listContent)
-                    btn:SetSize(260, btnHeight)
-                    btn:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
-                    btn:SetFrameStrata("DIALOG")
-                    btn:RegisterForClicks("LeftButtonUp")
-                    
-                    local text = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightLeft")
-                    text:SetPoint("LEFT", 5, 0)
-                    btn.text = text
-                    
-                    btn:SetScript("OnClick", function(self)
-                        if IsMorpherReady() then
-                            SendMorphCommand("TITLE:" .. self.titleID)
-                            if not TransmorpherCharacterState then TransmorpherCharacterState = {} end
-                            TransmorpherCharacterState.TitleID = self.titleID
-                            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Title set to '" .. self.titleName .. "' (Saved)")
-                            PlaySound("gsTitleOptionOK")
-                        end
-                    end)
-                    
-                    titleButtons[index] = btn
+                if needle == "" or name:lower():find(needle, 1, true) then
+                    y = y + 1
+                    local b = titleBtns[y]
+                    if not b then
+                        b = CreateFrame("Button", nil, listContent)
+                        b:SetSize(240, h)
+                        b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
+                        
+                        local fs = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightLeft")
+                        fs:SetPoint("LEFT", 5, 0)
+                        b.text = fs
+                        
+                        b:SetScript("OnClick", function(self)
+                            if IsMorpherReady() then
+                                SendMorphCommand("TITLE:" .. self.titleID)
+                                if not TransmorpherCharacterState then TransmorpherCharacterState = {} end
+                                TransmorpherCharacterState.TitleID = self.titleID
+                                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Title set: " .. self.titleName)
+                                PlaySound("gsTitleOptionOK")
+                            end
+                        end)
+                        titleBtns[y] = b
+                    end
+                    b.titleID = t.id
+                    b.titleName = name
+                    b.text:SetText(name)
+                    b:SetPoint("TOPLEFT", 0, -((y-1)*h))
+                    b:Show()
                 end
-                
-                btn:SetPoint("TOPLEFT", 0, -((index - 1) * btnHeight))
-                btn.text:SetText(name)
-                btn.titleID = titleData.id
-                btn.titleName = name
-                btn:Show()
             end
         end
-        
-        listContent:SetHeight(math.max(1, index * btnHeight))
+        listContent:SetHeight(math.max(1, y * h))
     end
     
-    titleSearch:SetScript("OnTextChanged", function(self)
-        UpdateTitleList(self:GetText())
-    end)
-
-    btnClearSearch:SetScript("OnClick", function()
-        titleSearch:SetText("")
-        titleSearch:ClearFocus()
-        searchLabel:Show()
-        UpdateTitleList("")
+    searchBox:SetScript("OnTextChanged", function(self) UpdateTitles(self:GetText()) end)
+    
+    btnClear:SetScript("OnClick", function()
+        searchBox:SetText("")
+        searchBox:ClearFocus()
+        searchHint:Show()
+        UpdateTitles("")
         PlaySound("gsTitleOptionOK")
     end)
     
-    -- Initial population
-    UpdateTitleList("")
+    UpdateTitles("")
     
-    local btnResetTitle = CreateGoldenButton("$parentResetTitle", scrollChild)
-    btnResetTitle:SetPoint("TOPLEFT", listFrame, "BOTTOMLEFT", 0, -12)
+    local btnResetTitle = CreateGoldenButton("$parentResetTitle", titleSection)
+    btnResetTitle:SetPoint("TOPLEFT", listContainer, "BOTTOMLEFT", 0, -10)
     btnResetTitle:SetSize(140, 24)
     btnResetTitle:SetText("Reset Title")
-    btnResetTitle:SetFrameStrata("DIALOG")
-    btnResetTitle:SetFrameLevel(scrollChild:GetFrameLevel() + 20)
-    
     btnResetTitle:SetScript("OnClick", function()
         if IsMorpherReady() then
             SendMorphCommand("TITLE_RESET")
@@ -6609,8 +6569,8 @@ do
         end
         PlaySound("gsTitleOptionOK")
     end)
-
-    scrollChild:SetHeight(math.abs(yOffset) + 250)
+    
+    content:SetHeight(500)
 end
 
 ---------------- EVENT LOOP & PERSISTENCE ----------------
@@ -7235,4 +7195,4 @@ do
 end
 
 -- Print load message
-DEFAULT_CHAT_FRAME:AddMessage("|cffF5C842\226\154\148 Transmorpher|r v1.1.1 loaded \226\128\148 |cffC8AA6E/morph|r or click the button on your character model.")
+DEFAULT_CHAT_FRAME:AddMessage("|cffF5C842⚔ Transmorpher|r v1.1.2 loaded — |cffC8AA6E/morph|r or click the button on your character model.")
