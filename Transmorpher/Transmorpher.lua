@@ -1,6 +1,6 @@
 local addon, ns = ...
 
-local mainFrameTitle = "|cffF5C842Transmorpher|r  |cff6a6050v1.1.2|r"
+local mainFrameTitle = "|cffF5C842Transmorpher|r  |cff6a6050v1.1.3|r"
 
 -- ============================================================
 -- CUSTOM GOLDEN BUTTON STYLE
@@ -159,36 +159,39 @@ local defaultSettings = {
     savePetMorph = true,
     saveHunterPetMorph = true,
     saveCombatPetMorph = true,
-    showDBWProc = true,
+    -- showDBWProc = true, -- REMOVED
+    showMetamorphosis = true,
     morphInShapeshift = false,
     worldTime = nil, -- nil or -1 = disabled, 0.0-1.0 = enabled
 }
 
+-- Per-Character Settings Accessor
 local function GetSettings()
-    local function copyTable(tableFrom)
-        local result = {}
-        for k, v in pairs(tableFrom) do
-            if type(v) == "table" then result[k] = copyTable(v)
-            else result[k] = v end
-        end
-        return result
+    -- Initialize global saved variable if needed
+    if not TransmorpherSettingsPerChar then
+        TransmorpherSettingsPerChar = {}
     end
-    if _G["TransmorpherSettings"] == nil then
-        _G["TransmorpherSettings"] = copyTable(defaultSettings)
-    else
-        for k, v in pairs(defaultSettings) do
-            if _G["TransmorpherSettings"][k] == nil then
-                _G["TransmorpherSettings"][k] = type(v) == "table" and copyTable(v) or v
+    
+    -- Populate defaults
+    for k, v in pairs(defaultSettings) do
+        if TransmorpherSettingsPerChar[k] == nil then
+            if type(v) == "table" then
+                -- Deep copy tables to avoid reference issues
+                local newTable = {}
+                for subK, subV in pairs(v) do newTable[subK] = subV end
+                TransmorpherSettingsPerChar[k] = newTable
+            else
+                TransmorpherSettingsPerChar[k] = v
             end
         end
-        if _G["TransmorpherSettings"].dressingRoomBackgroundTexture[GetRealmName()] == nil then
-            _G["TransmorpherSettings"].dressingRoomBackgroundTexture[GetRealmName()] = {}
-        end
-        if _G["TransmorpherSettings"].dressingRoomBackgroundTexture[GetRealmName()][GetUnitName("player")] == nil then
-            _G["TransmorpherSettings"].dressingRoomBackgroundTexture[GetRealmName()][GetUnitName("player")] = defaultSettings.dressingRoomBackgroundTexture[GetRealmName()][GetUnitName("player")]
-        end
     end
-    return _G["TransmorpherSettings"]
+
+    -- Ensure complex tables are init
+    if not TransmorpherSettingsPerChar.dressingRoomBackgroundTexture then
+        TransmorpherSettingsPerChar.dressingRoomBackgroundTexture = {}
+    end
+    
+    return TransmorpherSettingsPerChar
 end
 
 local function arrayHasValue(array, value)
@@ -204,7 +207,7 @@ end
 -- via its MorphGuard system — no Lua-side burst loops needed.
 
 TRANSMORPHER_CMD = ""  -- Global variable the DLL reads
-TRANSMORPHER_DLL_LOADED = false  -- Global variable the DLL sets when loaded
+TRANSMORPHER_DLL_LOADED = nil  -- Global variable the DLL sets when loaded (String "TRUE")
 
 -- Track whether the DLL has been told to suspend (model-changing form active)
 local morphSuspended = false
@@ -215,8 +218,18 @@ local savedMountDisplayForVehicle = nil
 local wasInVehicleLastFrame = false
 
 local function IsModelChangingForm()
+    local settings = GetSettings()
+    
+    -- Warlock Metamorphosis logic (highest priority if enabled)
+    if classFileName == "WARLOCK" and settings.showMetamorphosis then
+        local form = GetShapeshiftForm()
+        if form > 0 then return true end
+    end
+
     -- If user wants morph to persist in shapeshift forms, never suspend
-    if GetSettings().morphInShapeshift then return false end
+    -- This handles the case where you are in Cat Form + Morphed, and you Reload.
+    -- Without this, the addon would see "Cat Form" and think "Suspend!", hiding your morph.
+    if settings.morphInShapeshift then return false end
 
     local form = GetShapeshiftForm()
     if form == 0 then return false end
@@ -226,6 +239,15 @@ local function IsModelChangingForm()
     -- are treated as normal display overrides — the morph display will
     -- persist through them so e.g. a morphed-to-orc player stays orc.
     if classFileName == "DRUID" then
+        -- FIX: If we are morphed and reload in Cat Form, we should NOT suspend if we want to see the Cat Form.
+        -- Wait, if "Keep Morph" is UNCHECKED, we WANT to see Cat Form.
+        -- So returning 'true' (suspend) is correct.
+        
+        -- BUT, if we return 'true', the addon sends 'SUSPEND'.
+        -- The DLL stops enforcing morphs.
+        -- The game renders Cat Form.
+        -- This is correct.
+        
         return true -- All druid forms (Bear, Cat, Travel, Moonkin, Tree, Aquatic)
     end
     
@@ -240,34 +262,33 @@ end
 -- Deathbringer's Will proc spell IDs (Normal + Heroic)
 -- These procs transform the player model; we suspend morph to show the proc form
 local dbwProcIds = {
-    [71484] = true, -- Strength of the Taunka (N)
-    [71561] = true, -- Strength of the Taunka (H)
-    [71486] = true, -- Power of the Taunka (N)
-    [71558] = true, -- Power of the Taunka (H)
-    [71485] = true, -- Agility of the Vrykul (N)
-    [71556] = true, -- Agility of the Vrykul (H)
-    [71492] = true, -- Speed of the Vrykul (N)
-    [71560] = true, -- Speed of the Vrykul (H)
-    [71491] = true, -- Aim of the Iron Dwarves (N)
-    [71559] = true, -- Aim of the Iron Dwarves (H)
-    [71487] = true, -- Precision of the Iron Dwarves (N)
-    [71557] = true, -- Precision of the Iron Dwarves (H)
+    [71484] = true, [71561] = true, -- Strength of the Taunka
+    [71486] = true, [71558] = true, -- Power of the Taunka
+    [71485] = true, [71556] = true, -- Agility of the Vrykul
+    [71492] = true, [71560] = true, -- Speed of the Vrykul
+    [71491] = true, [71559] = true, -- Aim of the Iron Dwarves
+    [71487] = true, [71557] = true, -- Precision of the Iron Dwarves
 }
 
-local dbwSuspended = false
-
 local function HasDBWProc()
-    for i = 1, 40 do
-        local _, _, _, _, _, _, _, _, _, _, spellId = UnitBuff("player", i)
-        if not spellId then break end
-        if dbwProcIds[spellId] then return true end
-    end
+    -- ALWAYS return false now that we removed the setting.
+    -- This means the addon will NEVER suspend morphs for DBW.
+    -- The DLL will handle enforcement via its internal hook logic
+    -- (checking the hardcoded DBW IDs and overriding if needed).
     return false
 end
 
 -- ============================================================
 -- WEAPON SET SYSTEM - Save different morphs per weapon config
 -- ============================================================
+
+-- Helper: Get weapon set key
+local function GetWeaponSetKey()
+    local mainHand = GetInventoryItemLink("player", 16) or "0"
+    local offHand = GetInventoryItemLink("player", 17) or "0"
+    return mainHand .. "|" .. offHand
+end
+
 local function TrackMorphCommand(cmd)
     if not GetSettings().saveMorphState then return end
     if not TransmorpherCharacterState then TransmorpherCharacterState = {Items={}, Morph=nil, Scale=nil, MountDisplay=nil, PetDisplay=nil, HunterPetDisplay=nil, HunterPetScale=nil, EnchantMH=nil, EnchantOH=nil, TitleID=nil} end
@@ -304,11 +325,11 @@ local function TrackMorphCommand(cmd)
         elseif prefix == "PET_RESET" then
             TransmorpherCharacterState.PetDisplay = nil
         elseif prefix == "HPET_MORPH" and parts[2] then
-            if GetSettings().saveCombatPetMorph or GetSettings().saveHunterPetMorph then
+            if GetSettings().saveHunterPetMorph then
                 TransmorpherCharacterState.HunterPetDisplay = tonumber(parts[2])
             end
         elseif prefix == "HPET_SCALE" and parts[2] then
-            if GetSettings().saveCombatPetMorph or GetSettings().saveHunterPetMorph then
+            if GetSettings().saveHunterPetMorph then
                 TransmorpherCharacterState.HunterPetScale = tonumber(parts[2])
             end
         elseif prefix == "HPET_RESET" then
@@ -340,15 +361,31 @@ local function TrackMorphCommand(cmd)
             TransmorpherCharacterState.TitleID = nil
         elseif prefix == "RESET" and parts[2] then
             if parts[2] == "ALL" then
-                TransmorpherCharacterState = {Items={}, Morph=nil, Scale=nil, MountDisplay=nil, PetDisplay=nil, HunterPetDisplay=nil, HunterPetScale=nil, EnchantMH=nil, EnchantOH=nil, TitleID=nil, WeaponSets={}}
+                -- Properly reset the state table while preserving weapon sets if needed, or clear all?
+                -- Re-initializing completely is safest for "RESET:ALL"
+                TransmorpherCharacterState = {
+                    Items={}, 
+                    Morph=nil, 
+                    Scale=nil, 
+                    MountDisplay=nil, 
+                    PetDisplay=nil, 
+                    HunterPetDisplay=nil, 
+                    HunterPetScale=nil, 
+                    EnchantMH=nil, 
+                    EnchantOH=nil, 
+                    TitleID=nil, 
+                    WeaponSets={}
+                }
             else
                 local slotId = tonumber(parts[2])
-                TransmorpherCharacterState.Items[slotId] = nil
-                -- Clear from weapon set if it's a weapon slot
-                if slotId == 16 or slotId == 17 then
-                    local setKey = GetWeaponSetKey()
-                    if TransmorpherCharacterState.WeaponSets[setKey] then
-                        TransmorpherCharacterState.WeaponSets[setKey][slotId] = nil
+                if slotId then
+                    TransmorpherCharacterState.Items[slotId] = nil
+                    -- Clear from weapon set if it's a weapon slot
+                    if slotId == 16 or slotId == 17 then
+                        local setKey = GetWeaponSetKey()
+                        if TransmorpherCharacterState.WeaponSets and TransmorpherCharacterState.WeaponSets[setKey] then
+                            TransmorpherCharacterState.WeaponSets[setKey][slotId] = nil
+                        end
                     end
                 end
             end
@@ -356,8 +393,7 @@ local function TrackMorphCommand(cmd)
     end
 end
 
-local function SendMorphCommand(cmd)
-    TrackMorphCommand(cmd)
+local function AppendCommand(cmd)
     if TRANSMORPHER_CMD == "" then
         TRANSMORPHER_CMD = cmd
     else
@@ -365,13 +401,14 @@ local function SendMorphCommand(cmd)
     end
 end
 
+local function SendMorphCommand(cmd)
+    TrackMorphCommand(cmd)
+    AppendCommand(cmd)
+end
+
 -- Send a raw signal to the DLL (SUSPEND/RESUME) without tracking state
 local function SendRawMorphCommand(cmd)
-    if TRANSMORPHER_CMD == "" then
-        TRANSMORPHER_CMD = cmd
-    else
-        TRANSMORPHER_CMD = TRANSMORPHER_CMD .. "|" .. cmd
-    end
+    AppendCommand(cmd)
 end
 
 -- ================================================================
@@ -602,20 +639,74 @@ local needsCharacterReset = false
 local function SendFullMorphState()
     -- ALWAYS send RESET:ALL on character login to clear DLL state from
     -- any previous character, even if saveMorphState is off.
-    if needsCharacterReset then
-        SendRawMorphCommand("RESET:ALL")
-        needsCharacterReset = false
-    end
-
+    -- Moved to after settings sync logic.
+    
     if not GetSettings().saveMorphState then
+        if needsCharacterReset then
+            SendRawMorphCommand("RESET:ALL")
+            needsCharacterReset = false
+        end
         return
     end
     if not TransmorpherCharacterState then
         return
     end
-    if IsModelChangingForm() or dbwSuspended or vehicleSuspended then return end
-
+    
+    -- Always send SETTINGS + RESET:ALL if needed
     local cmdQueue = {}
+    
+    -- Sync Settings (Always send these first)
+    local settings = GetSettings()
+    if settings then
+        table.insert(cmdQueue, "SET:DBW:" .. (settings.showDBWProc and "1" or "0"))
+        table.insert(cmdQueue, "SET:META:" .. (settings.showMetamorphosis and "1" or "0"))
+        table.insert(cmdQueue, "SET:SHAPE:" .. (settings.morphInShapeshift and "1" or "0"))
+    end
+    
+    -- FIX: If we need a character reset, send it NOW.
+    if needsCharacterReset then
+        table.insert(cmdQueue, "RESET:ALL")
+        needsCharacterReset = false
+    end
+
+    if IsModelChangingForm() or dbwSuspended or vehicleSuspended then 
+        -- If we are suspended, we send settings + reset, but NOT the morph data.
+        -- And we make sure to enforce SUSPEND state.
+        table.insert(cmdQueue, "SUSPEND")
+        
+        -- CRITICAL FIX: If we are suspended (e.g. in Cat Form), we MUST still send
+        -- the morph data so the DLL knows what to resume to later!
+        -- The DLL will receive it but won't apply it yet because of the SUSPEND flag.
+        -- If we don't send it, the DLL has 0 morph state, so RESUME does nothing.
+        
+        if TransmorpherCharacterState.Scale then table.insert(cmdQueue, "SCALE:"..TransmorpherCharacterState.Scale) end
+        if TransmorpherCharacterState.Morph then table.insert(cmdQueue, "MORPH:"..TransmorpherCharacterState.Morph) end
+        if TransmorpherCharacterState.MountDisplay and GetSettings().saveMountMorph then
+            table.insert(cmdQueue, "MOUNT_MORPH:"..TransmorpherCharacterState.MountDisplay)
+        end
+        -- ... (other morphs)
+        if TransmorpherCharacterState.Items then
+            for slot, item in pairs(TransmorpherCharacterState.Items) do
+                table.insert(cmdQueue, "ITEM:"..slot..":"..item)
+            end
+        end
+        
+        if #cmdQueue > 0 then
+            SendRawMorphCommand(table.concat(cmdQueue, "|"))
+        end
+        return 
+    end
+
+    -- FORCE RESUME if settings allow it (Fixes reload issue in shapeshift)
+    if settings.morphInShapeshift and (GetShapeshiftForm() > 0) then
+         morphSuspended = false
+         table.insert(cmdQueue, "RESUME")
+    end
+    if not settings.showDBWProc and HasDBWProc() then
+         dbwSuspended = false
+         table.insert(cmdQueue, "RESUME")
+    end
+
     if TransmorpherCharacterState.Scale then table.insert(cmdQueue, "SCALE:"..TransmorpherCharacterState.Scale) end
     if TransmorpherCharacterState.Morph then table.insert(cmdQueue, "MORPH:"..TransmorpherCharacterState.Morph) end
     if TransmorpherCharacterState.MountDisplay and GetSettings().saveMountMorph then
@@ -789,11 +880,16 @@ local function RestoreMorphedUI()
 end
 
 local function IsMorpherReady()
-    -- Check if the DLL has set the loaded flag
-    -- The DLL should set TRANSMORPHER_DLL_LOADED = true when it initializes
-    -- For now, return true to allow morphing (DLL detection can be added later)
-    return true
-    -- return TRANSMORPHER_DLL_LOADED == true
+    if TRANSMORPHER_DLL_LOADED then
+        return true
+    else
+        -- Only warn once per session/reload to avoid spam
+        if not _G.TransmorpherDLLWarned then
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: |cffff0000ERROR:|r Morpher DLL not loaded! Place dinput8.dll (or version.dll/dsound.dll) in your WoW folder.")
+            _G.TransmorpherDLLWarned = true
+        end
+        return false
+    end
 end
 
 local dressingRoomBorderBackdrop = {
@@ -1245,15 +1341,30 @@ do
         end
         -- Apply enchant morphs
         if mainFrame.enchantSlots then
-            if mainFrame.enchantSlots["Enchant MH"].enchantId then
-                SendMorphCommand("ENCHANT_MH:" .. mainFrame.enchantSlots["Enchant MH"].enchantId)
-                mainFrame.enchantSlots["Enchant MH"].isMorphed = true
-                ShowMorphGlow(mainFrame.enchantSlots["Enchant MH"], "orange")
+            local mh = mainFrame.enchantSlots["Enchant MH"]
+            if mh then
+                if mh.enchantId then
+                    SendMorphCommand("ENCHANT_MH:" .. mh.enchantId)
+                    mh.isMorphed = true
+                    ShowMorphGlow(mh, "orange")
+                else
+                    SendMorphCommand("ENCHANT_RESET_MH")
+                    mh.isMorphed = false
+                    HideMorphGlow(mh)
+                end
             end
-            if mainFrame.enchantSlots["Enchant OH"].enchantId then
-                SendMorphCommand("ENCHANT_OH:" .. mainFrame.enchantSlots["Enchant OH"].enchantId)
-                mainFrame.enchantSlots["Enchant OH"].isMorphed = true
-                ShowMorphGlow(mainFrame.enchantSlots["Enchant OH"], "orange")
+            
+            local oh = mainFrame.enchantSlots["Enchant OH"]
+            if oh then
+                if oh.enchantId then
+                    SendMorphCommand("ENCHANT_OH:" .. oh.enchantId)
+                    oh.isMorphed = true
+                    ShowMorphGlow(oh, "orange")
+                else
+                    SendMorphCommand("ENCHANT_RESET_OH")
+                    oh.isMorphed = false
+                    HideMorphGlow(oh)
+                end
             end
         end
         SyncDressingRoom()
@@ -1689,6 +1800,9 @@ local function slot_RemoveItem(self)
             if equippedId then
                 -- Morph slot back to equipped item (visually undoes the morph)
                 SendMorphCommand("ITEM:" .. slotToEquipSlotId[self.slotName] .. ":" .. equippedId)
+            else
+                -- If slot is empty, send 0 to reset it
+                SendMorphCommand("ITEM:" .. slotToEquipSlotId[self.slotName] .. ":0")
             end
             -- Also clear from saved state
             SendMorphCommand("RESET:" .. slotToEquipSlotId[self.slotName])
@@ -6194,22 +6308,34 @@ do
     createSectionHeader(scrollChild, "Behavior Settings", yOffset)
     yOffset = yOffset - 36
     
-    local dbwCheckbox = createCheckbox(scrollChild, "Show Deathbringer's Will proc form", "showDBWProc", yOffset,
-        "Temporarily show the DBW proc transformation (suspend morph during proc)")
-    -- When toggling the DBW setting, immediately update the suspend state
-    dbwCheckbox:HookScript("OnClick", function(self)
+    local metaCheckbox = createCheckbox(scrollChild, "Show Warlock Metamorphosis", "showMetamorphosis", yOffset,
+        "Temporarily show the Metamorphosis demon form (suspend morph)")
+    -- When toggling Metamorphosis setting, update suspend state if applicable
+    metaCheckbox:HookScript("OnClick", function(self)
         local enabled = self:GetChecked() == 1
-        if not enabled and dbwSuspended then
-            -- User turned it off while DBW was suspending: resume immediately
-            dbwSuspended = false
-            if not morphSuspended and not vehicleSuspended then
-                SendRawMorphCommand("RESUME")
-            end
-        elseif enabled and not dbwSuspended and HasDBWProc() then
-            -- User turned it on while a DBW proc is active: suspend immediately
-            dbwSuspended = true
-            if not morphSuspended and not vehicleSuspended then
-                SendRawMorphCommand("SUSPEND")
+        -- Send command to DLL immediately
+        SendRawMorphCommand("SET:META:" .. (enabled and "1" or "0"))
+
+        if classFileName == "WARLOCK" then
+            local inForm = GetShapeshiftForm() > 0
+            if inForm then
+                if enabled then
+                    -- Turned ON while in form -> Suspend
+                    if not morphSuspended then
+                        morphSuspended = true
+                        if not dbwSuspended and not vehicleSuspended then
+                            SendRawMorphCommand("SUSPEND")
+                        end
+                    end
+                else
+                    -- Turned OFF while in form -> Resume
+                    if morphSuspended then
+                        morphSuspended = false
+                        if not dbwSuspended and not vehicleSuspended then
+                            SendRawMorphCommand("RESUME")
+                        end
+                    end
+                end
             end
         end
     end)
@@ -6220,6 +6346,9 @@ do
     -- When toggling shapeshift morph setting, immediately update suspend state
     shapeshiftCheckbox:HookScript("OnClick", function(self)
         local enabled = self:GetChecked() == 1
+        -- Send command to DLL immediately
+        SendRawMorphCommand("SET:SHAPE:" .. (enabled and "1" or "0"))
+
         if enabled and morphSuspended then
             -- User wants morph in shapeshift: resume immediately
             morphSuspended = false
@@ -6339,73 +6468,134 @@ end
 
 ---------------- TIME TAB ----------------
 
----------------- TIME & TITLE TAB (REBUILT) ----------------
+---------------- MISC TAB (Environment & Titles) ----------------
 
 do
-    local envTab = mainFrame.tabs.env
+    local miscTab = mainFrame.tabs.env
     
-    -- 1. Main Scroll Frame (Outer Container)
-    -- Using explicit strata to avoid overlap issues
-    local outerScroll = CreateFrame("ScrollFrame", "$parentEnvScroll", envTab, "UIPanelScrollFrameTemplate")
-    outerScroll:SetPoint("TOPLEFT", 10, -10)
-    outerScroll:SetPoint("BOTTOMRIGHT", -30, 10)
-    outerScroll:SetFrameStrata("MEDIUM")
-    outerScroll:SetFrameLevel(envTab:GetFrameLevel() + 5)
+    -- Sub-Tab Navigation
+    local subTabBar = CreateFrame("Frame", nil, miscTab)
+    subTabBar:SetSize(220, 30)
+    subTabBar:SetPoint("TOPLEFT", 0, -10)
     
-    -- 2. Scroll Child (Content Holder)
-    local content = CreateFrame("Frame", nil, outerScroll)
-    content:SetSize(outerScroll:GetWidth(), 500)
-    content:SetFrameStrata("MEDIUM")
-    content:SetFrameLevel(outerScroll:GetFrameLevel() + 5)
-    outerScroll:SetScrollChild(content)
+    local envPanel = CreateFrame("Frame", "$parentEnvPanel", miscTab)
+    envPanel:SetPoint("TOPLEFT", 0, -45)
+    envPanel:SetPoint("BOTTOMRIGHT")
     
-    -- Header Helper
-    local function CreateHeader(parent, text, yOff)
-        local h = CreateFrame("Frame", nil, parent)
-        h:SetSize(parent:GetWidth() - 5, 26)
-        h:SetPoint("TOPLEFT", 0, yOff)
+    local titlesPanel = CreateFrame("Frame", "$parentTitlesPanel", miscTab)
+    titlesPanel:SetPoint("TOPLEFT", 0, -45)
+    titlesPanel:SetPoint("BOTTOMRIGHT")
+    titlesPanel:Hide()
+    
+    local function CreateMiscSubTabBtn(id, text)
+        local btn = CreateFrame("Button", nil, subTabBar)
+        btn:SetID(id)
+        btn:SetSize(110, 30)
         
-        h:SetBackdrop({
-            bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            tile = true, tileSize = 16, edgeSize = 12,
-            insets = { left = 3, right = 3, top = 3, bottom = 3 }
-        })
-        h:SetBackdropColor(0.15, 0.12, 0.08, 0.95)
-        h:SetBackdropBorderColor(0.6, 0.5, 0.2, 0.8)
+        local bg = btn:CreateTexture(nil, "BACKGROUND")
+        bg:SetAllPoints()
+        bg:SetTexture(1, 1, 1, 0.0)
+        btn.bg = bg
         
-        local fs = h:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-        fs:SetPoint("LEFT", 10, 0)
+        local line = btn:CreateTexture(nil, "OVERLAY")
+        line:SetHeight(2)
+        line:SetPoint("BOTTOMLEFT", 15, 0)
+        line:SetPoint("BOTTOMRIGHT", -15, 0)
+        line:SetTexture(1, 0.82, 0)
+        line:Hide()
+        btn.line = line
+        
+        local fs = btn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        fs:SetPoint("CENTER", 0, 0)
         fs:SetText(text)
-        fs:SetTextColor(1, 0.82, 0)
-        return h
+        fs:SetTextColor(0.5, 0.5, 0.5)
+        btn.fs = fs
+        
+        btn.SetActive = function(self, active)
+            self.isActive = active
+            if active then
+                self.line:Show()
+                self.fs:SetTextColor(1, 1, 1)
+                self.bg:SetTexture(1, 1, 1, 0.05)
+            else
+                self.line:Hide()
+                self.fs:SetTextColor(0.5, 0.5, 0.5)
+                self.bg:SetTexture(0, 0, 0, 0)
+            end
+        end
+        
+        btn:SetScript("OnEnter", function(self) if not self.isActive then self.fs:SetTextColor(0.9, 0.9, 0.9); self.bg:SetTexture(1, 1, 1, 0.03) end end)
+        btn:SetScript("OnLeave", function(self) if not self.isActive then self.fs:SetTextColor(0.5, 0.5, 0.5); self.bg:SetTexture(0, 0, 0, 0) end end)
+        
+        return btn
     end
     
-    -- ================= TIME CONTROL SECTION =================
-    local timeY = 0
-    local timeHeader = CreateHeader(content, "Time Control", timeY)
+    local btnEnv = CreateMiscSubTabBtn(1, "Environment")
+    btnEnv:SetPoint("LEFT", 0, 0)
     
-    local timeSection = CreateFrame("Frame", nil, content)
-    timeSection:SetPoint("TOPLEFT", 0, timeY - 30)
-    timeSection:SetSize(content:GetWidth(), 100)
-    timeSection:SetFrameStrata("MEDIUM")
-    timeSection:SetFrameLevel(content:GetFrameLevel() + 5)
+    local btnTitles = CreateMiscSubTabBtn(2, "Titles")
+    btnTitles:SetPoint("LEFT", btnEnv, "RIGHT", 0, 0)
     
-    local slider = CreateFrame("Slider", "$parentTimeSlider", timeSection, "OptionsSliderTemplate")
-    slider:SetPoint("TOPLEFT", 20, -10)
-    slider:SetWidth(240)
+    local function ShowMiscSubTab(id)
+        local showEnv = id == 1
+        if showEnv then
+            envPanel:Show()
+            titlesPanel:Hide()
+        else
+            envPanel:Hide()
+            titlesPanel:Show()
+        end
+        btnEnv:SetActive(showEnv)
+        btnTitles:SetActive(not showEnv)
+        PlaySound("gsTitleOptionOK")
+    end
+    
+    btnEnv:SetScript("OnClick", function() ShowMiscSubTab(1) end)
+    btnTitles:SetScript("OnClick", function() ShowMiscSubTab(2) end)
+    
+    ShowMiscSubTab(1) -- Default to Env
+    
+    -- ================= ENVIRONMENT PANEL (TIME) =================
+    
+    local timeCard = CreateFrame("Frame", nil, envPanel)
+    timeCard:SetPoint("TOPLEFT", 10, -10)
+    timeCard:SetSize(envPanel:GetWidth() - 20, 120)
+    timeCard:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    })
+    timeCard:SetBackdropColor(0.08, 0.06, 0.03, 0.9)
+    timeCard:SetBackdropBorderColor(0.60, 0.50, 0.18, 0.7)
+    
+    local timeTitle = timeCard:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    timeTitle:SetPoint("TOPLEFT", 12, -12)
+    timeTitle:SetText("|cffF5C842Time Control|r")
+    
+    local timeDesc = timeCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    timeDesc:SetPoint("TOPLEFT", timeTitle, "BOTTOMLEFT", 0, -4)
+    timeDesc:SetText("Override the client-side time of day.")
+    timeDesc:SetTextColor(0.7, 0.7, 0.7)
+    
+    local slider = CreateFrame("Slider", "$parentTimeSlider", timeCard, "OptionsSliderTemplate")
+    slider:SetPoint("TOPLEFT", 20, -60)
+    slider:SetWidth(timeCard:GetWidth() - 140)
     slider:SetHeight(18)
     slider:SetMinMaxValues(0.0, 24.0)
     slider:SetValueStep(0.5)
+    slider:EnableMouse(true)
     
     _G[slider:GetName().."Low"]:SetText("Midnight")
     _G[slider:GetName().."High"]:SetText("Midnight")
-    _G[slider:GetName().."Text"]:SetText("Noon")
+    local sliderText = _G[slider:GetName().."Text"]
+    sliderText:SetText("Noon")
+    sliderText:SetTextColor(1, 0.82, 0)
     
     slider:SetScript("OnValueChanged", function(self, value)
         local hour = math.floor(value)
         local minute = math.floor((value - hour) * 60)
-        _G[self:GetName().."Text"]:SetText(string.format("%02d:%02d", hour, minute))
+        sliderText:SetText(string.format("%02d:%02d", hour, minute))
     end)
     
     slider:SetScript("OnShow", function(self)
@@ -6416,10 +6606,10 @@ do
         end
     end)
     
-    local btnApplyTime = CreateGoldenButton("$parentApplyTime", timeSection)
-    btnApplyTime:SetPoint("TOPLEFT", slider, "BOTTOMLEFT", 0, -20)
-    btnApplyTime:SetSize(100, 22)
-    btnApplyTime:SetText("Apply")
+    local btnApplyTime = CreateGoldenButton("$parentApplyTime", timeCard)
+    btnApplyTime:SetPoint("LEFT", slider, "RIGHT", 15, 0)
+    btnApplyTime:SetSize(80, 24)
+    btnApplyTime:SetText("Set Time")
     btnApplyTime:SetScript("OnClick", function()
         local val = slider:GetValue() / 24.0
         if IsMorpherReady() then
@@ -6427,13 +6617,15 @@ do
             if not TransmorpherCharacterState then TransmorpherCharacterState = {} end
             TransmorpherCharacterState.WorldTime = val
             SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Time updated.")
+        else
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: |cffff0000DLL not loaded!|r")
         end
         PlaySound("gsTitleOptionOK")
     end)
     
-    local btnResetTime = CreateGoldenButton("$parentResetTime", timeSection)
-    btnResetTime:SetPoint("LEFT", btnApplyTime, "RIGHT", 10, 0)
-    btnResetTime:SetSize(100, 22)
+    local btnResetTime = CreateGoldenButton("$parentResetTime", timeCard)
+    btnResetTime:SetPoint("TOPRIGHT", timeCard, "TOPRIGHT", -10, -10)
+    btnResetTime:SetSize(80, 20)
     btnResetTime:SetText("Reset")
     btnResetTime:SetScript("OnClick", function()
         if IsMorpherReady() then
@@ -6445,19 +6637,11 @@ do
         PlaySound("gsTitleOptionOK")
     end)
     
-    -- ================= TITLE MORPH SECTION =================
-    local titleY = -140
-    local titleHeader = CreateHeader(content, "Title Morph", titleY)
+    -- ================= TITLES PANEL =================
     
-    local titleSection = CreateFrame("Frame", nil, content)
-    titleSection:SetPoint("TOPLEFT", 0, titleY - 30)
-    titleSection:SetSize(content:GetWidth(), 300)
-    titleSection:SetFrameStrata("MEDIUM")
-    titleSection:SetFrameLevel(content:GetFrameLevel() + 5)
-    
-    local searchBox = CreateFrame("EditBox", "$parentTitleSearch", titleSection, "InputBoxTemplate")
-    searchBox:SetPoint("TOPLEFT", 20, 0)
-    searchBox:SetSize(180, 22)
+    local searchBox = CreateFrame("EditBox", "$parentTitleSearch", titlesPanel, "InputBoxTemplate")
+    searchBox:SetPoint("TOPLEFT", 10, -10)
+    searchBox:SetSize(titlesPanel:GetWidth() - 100, 22)
     searchBox:SetAutoFocus(false)
     searchBox:SetFontObject("ChatFontNormal")
     searchBox:SetTextInsets(6, 6, 0, 0)
@@ -6472,56 +6656,74 @@ do
     end)
     searchBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
     
-    local btnClear = CreateGoldenButton("$parentTitleClear", titleSection)
+    local btnClear = CreateFrame("Button", nil, titlesPanel)
+    btnClear:SetSize(16, 16)
     btnClear:SetPoint("LEFT", searchBox, "RIGHT", 5, 0)
-    btnClear:SetSize(60, 22)
-    btnClear:SetText("Clear")
+    btnClear:SetNormalTexture("Interface\\FriendsFrame\\ClearBroadcastIcon")
+    btnClear:SetAlpha(0.6)
+    btnClear:SetScript("OnClick", function()
+        searchBox:SetText("")
+        searchBox:ClearFocus()
+        searchHint:Show()
+    end)
     
-    -- List Container (Background)
-    local listContainer = CreateFrame("Frame", nil, titleSection)
-    listContainer:SetPoint("TOPLEFT", 20, -30)
-    listContainer:SetSize(280, 200)
-    listContainer:SetBackdrop({
+    local btnResetTitle = CreateGoldenButton("$parentResetTitle", titlesPanel)
+    btnResetTitle:SetPoint("LEFT", btnClear, "RIGHT", 5, 0)
+    btnResetTitle:SetSize(60, 22)
+    btnResetTitle:SetText("Reset")
+    
+    -- Title List
+    local listBg = CreateFrame("Frame", "$parentTitleListBg", titlesPanel)
+    listBg:SetPoint("TOPLEFT", 10, -40)
+    listBg:SetPoint("BOTTOMRIGHT", -10, 10)
+    listBg:SetBackdrop({
         bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
         tile = true, tileSize = 16, edgeSize = 12,
-        insets = { left = 3, right = 3, top = 3, bottom = 3 }
+        insets = { left = 2, right = 2, top = 2, bottom = 2 }
     })
-    listContainer:SetBackdropColor(0, 0, 0, 0.4)
-    listContainer:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
+    listBg:SetBackdropColor(0.04, 0.03, 0.03, 0.9)
+    listBg:SetBackdropBorderColor(0.80, 0.65, 0.22, 0.85)
     
-    -- Inner List Scroll
-    local listScroll = CreateFrame("ScrollFrame", "$parentTitleListScroll", listContainer, "UIPanelScrollFrameTemplate")
-    listScroll:SetPoint("TOPLEFT", 5, -5)
-    listScroll:SetPoint("BOTTOMRIGHT", -26, 5)
+    local listScroll = CreateFrame("ScrollFrame", "$parentTitleListScroll", listBg, "UIPanelScrollFrameTemplate")
+    listScroll:SetPoint("TOPLEFT", 4, -4)
+    listScroll:SetPoint("BOTTOMRIGHT", -22, 4)
     
     local listContent = CreateFrame("Frame", nil, listScroll)
-    listContent:SetSize(240, 1)
+    listContent:SetSize(listScroll:GetWidth(), 1)
     listScroll:SetScrollChild(listContent)
     
     local titleBtns = {}
-    local function UpdateTitles(filter)
-        for _, b in pairs(titleBtns) do b:Hide() end
-        local needle = (filter or ""):lower()
+    local TITLE_ROW_H = 22
+    
+    local function UpdateTitles()
+        local query = searchBox:GetText():lower()
         local y = 0
-        local h = 20
+        
+        -- Reuse buttons
+        for _, b in ipairs(titleBtns) do b:Hide() end
         
         if Transmorpher_Titles then
             for _, t in ipairs(Transmorpher_Titles) do
                 local name = t.name:gsub("%%s", ""):gsub("^%s+", ""):gsub("%s+$", "")
                 if name == "" then name = t.name end
                 
-                if needle == "" or name:lower():find(needle, 1, true) then
+                if query == "" or name:lower():find(query, 1, true) then
                     y = y + 1
                     local b = titleBtns[y]
                     if not b then
                         b = CreateFrame("Button", nil, listContent)
-                        b:SetSize(240, h)
+                        b:SetSize(listContent:GetWidth(), TITLE_ROW_H)
                         b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
+                        b:GetHighlightTexture():SetVertexColor(0.8, 0.7, 0.3, 0.3)
                         
                         local fs = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightLeft")
-                        fs:SetPoint("LEFT", 5, 0)
+                        fs:SetPoint("LEFT", 8, 0)
                         b.text = fs
+                        
+                        local idFs = b:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+                        idFs:SetPoint("RIGHT", -8, 0)
+                        b.idText = idFs
                         
                         b:SetScript("OnClick", function(self)
                             if IsMorpherReady() then
@@ -6530,47 +6732,49 @@ do
                                 TransmorpherCharacterState.TitleID = self.titleID
                                 SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Title set: " .. self.titleName)
                                 PlaySound("gsTitleOptionOK")
+                            else
+                                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: |cffff0000DLL not loaded!|r")
                             end
                         end)
                         titleBtns[y] = b
                     end
+                    
                     b.titleID = t.id
                     b.titleName = name
                     b.text:SetText(name)
-                    b:SetPoint("TOPLEFT", 0, -((y-1)*h))
+                    b.idText:SetText(t.id)
+                    b:SetPoint("TOPLEFT", 0, -((y-1)*TITLE_ROW_H))
                     b:Show()
                 end
             end
         end
-        listContent:SetHeight(math.max(1, y * h))
+        listContent:SetHeight(math.max(1, y * TITLE_ROW_H))
     end
     
-    searchBox:SetScript("OnTextChanged", function(self) UpdateTitles(self:GetText()) end)
+    searchBox:SetScript("OnTextChanged", UpdateTitles)
+    btnClear:GetScript("OnClick") -- Trigger initial update/clear
     
-    btnClear:SetScript("OnClick", function()
-        searchBox:SetText("")
-        searchBox:ClearFocus()
-        searchHint:Show()
-        UpdateTitles("")
-        PlaySound("gsTitleOptionOK")
-    end)
-    
-    UpdateTitles("")
-    
-    local btnResetTitle = CreateGoldenButton("$parentResetTitle", titleSection)
-    btnResetTitle:SetPoint("TOPLEFT", listContainer, "BOTTOMLEFT", 0, -10)
-    btnResetTitle:SetSize(140, 24)
-    btnResetTitle:SetText("Reset Title")
     btnResetTitle:SetScript("OnClick", function()
         if IsMorpherReady() then
             SendMorphCommand("TITLE_RESET")
             if TransmorpherCharacterState then TransmorpherCharacterState.TitleID = nil end
-            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Title reset.")
+            
+            -- Re-select the original known title if available
+            if GetCurrentTitle then
+                local currentTitle = GetCurrentTitle()
+                if currentTitle and currentTitle > 0 then
+                    if SetCurrentTitle then SetCurrentTitle(currentTitle) end
+                else
+                    if SetCurrentTitle then SetCurrentTitle(-1) end
+                end
+            end
+            
+            SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Title reset to original.")
         end
         PlaySound("gsTitleOptionOK")
     end)
     
-    content:SetHeight(500)
+    titlesPanel:SetScript("OnShow", UpdateTitles)
 end
 
 ---------------- EVENT LOOP & PERSISTENCE ----------------
@@ -6611,7 +6815,10 @@ do
                     "Mechano", "Turbo", "Automatic", "Flying", "Hover", "Glider", "Sled", "Rocket", 
                     "Blimp", "Balloon", "Gnome", "Goblin", "Experimental", "Constructor", "Security", 
                     "Defense", "Assault", "War", "Combat", "Battle", "Transport", "Portal", 
-                    "Focus", "Nexus", "Pulse", "Energy", "Beam", "Static", "Launcher", "Ram"
+                    "Focus", "Nexus", "Pulse", "Energy", "Beam", "Static", "Launcher", "Ram",
+                    "Stabled Thunder Bluff Kodo", "Stabled Darkspear Raptor", "Stabled Forsaken Warhorse",
+                    "Stabled Orgrimmar Wolf", "Stabled Silvermoon Hawkstrider", "Stabled Sunreaver Hawkstrider",
+                    "Stabled Argent Warhorse"
                 }
                 for _, p in ipairs(patterns) do
                     if name:find(p) then
@@ -6624,9 +6831,15 @@ do
             if isVehicle then
                 if not vehicleSuspended then
                     vehicleSuspended = true
+                    -- CRITICAL FIX: Mark as "was in vehicle" so the OnUpdate loop monitors it.
+                    -- If entry fails (e.g. in combat), the loop will see (not inVehicle and wasInVehicle)
+                    -- and trigger the Resume logic immediately, preventing the "stuck suspended" bug.
+                    wasInVehicleLastFrame = true
+                    
                     if TransmorpherCharacterState and TransmorpherCharacterState.MountDisplay then
                         savedMountDisplayForVehicle = TransmorpherCharacterState.MountDisplay
-                        TRANSMORPHER_CMD = "MOUNT_RESET|SUSPEND"
+                        -- Use safe command sending
+                        SendRawMorphCommand("MOUNT_RESET|SUSPEND")
                         TransmorpherCharacterState.MountDisplay = nil
                     else
                         SendRawMorphCommand("SUSPEND")
@@ -6651,6 +6864,9 @@ do
     mainFrame:RegisterEvent("UNIT_INVENTORY_CHANGED")
     mainFrame:RegisterEvent("UNIT_ENTERED_VEHICLE")
     mainFrame:RegisterEvent("UNIT_EXITED_VEHICLE")
+    mainFrame:RegisterEvent("PLAYER_LOGOUT")
+    mainFrame:RegisterEvent("BARBER_SHOP_OPEN")
+    mainFrame:RegisterEvent("BARBER_SHOP_CLOSE")
     
     -- Track form state for edge detection (only act on transitions)
     local lastKnownForm = -1
@@ -6698,6 +6914,13 @@ do
     end)
 
     mainFrame:SetScript("OnEvent", function(self, event, ...)
+        if event == "PLAYER_LOGOUT" then
+            -- Immediately stop all morphing activity to prevent crashes during object destruction
+            -- Use SILENT reset to avoid triggering visual updates on a dying player object.
+            SendRawMorphCommand("RESET:SILENT")
+            return
+        end
+
         if event == "PLAYER_LOGIN" then
             -- Initialize per-character SavedVariables
             if not TransmorpherCharacterState then
@@ -6718,11 +6941,18 @@ do
             -- Immediately send RESET:ALL to the DLL so stale state from a
             -- previous character is cleared within the next 20ms tick.
             -- The full morph state will be sent after the delayed schedule.
-            SendRawMorphCommand("RESET:ALL")
+            -- REMOVED: We now bundle RESET:ALL into the SendFullMorphState batch.
+            -- SendRawMorphCommand("RESET:ALL")
 
             -- Evaluate current form/proc state
             lastKnownForm = GetShapeshiftForm()
             lastKnownMounted = IsMounted() or false
+            
+            -- IMPORTANT: Always sync settings first so IsModelChangingForm() has correct data
+            -- But we can't easily sync settings here because SendFullMorphState handles it.
+            -- However, IsModelChangingForm() reads GetSettings() directly, which reads saved variables.
+            -- SavedVariables are loaded BEFORE PlayerLogin. So settings are correct.
+            
             morphSuspended = IsModelChangingForm()
             dbwSuspended = GetSettings().showDBWProc and HasDBWProc() or false
             vehicleSuspended = IsInVehicle()
@@ -6733,12 +6963,21 @@ do
                 SendMorphCommand("MOUNT_RESET")
             end
             
+            -- FIX: Even if we suspend, we MUST schedule the morph send.
+            -- Why? because SendFullMorphState() respects the suspended flag and will simply
+            -- send settings + scale (which are allowed) but NOT the morph.
+            -- BUT, crucially, it sends the "RESET:ALL" prefix if needsCharacterReset is true.
+            -- If we don't call ScheduleMorphSend, needsCharacterReset stays true forever,
+            -- and we never actually initialize the DLL state for this session.
+            
+            -- So, regardless of suspension, we schedule the send.
+            -- The SendFullMorphState function will decide what to send.
+            
+            ScheduleMorphSend(0.4)
+            
             if morphSuspended or dbwSuspended or vehicleSuspended then
-                SendRawMorphCommand("SUSPEND")
-            else
-                -- PLAYER_ENTERING_WORLD will fire shortly and override this
-                -- with a 0.05 s timer, but schedule a 0.4 s fallback just in case.
-                ScheduleMorphSend(0.4)
+                 -- If we are suspended, we ALSO explicitly send SUSPEND to be safe
+                 SendRawMorphCommand("SUSPEND")
             end
             
             -- Schedule mount fix check
@@ -6795,7 +7034,11 @@ do
             if currentForm == lastKnownForm then return end
             lastKnownForm = currentForm
 
+            -- REMOVED DBW Check here too
+            -- if GetSettings().showDBWProc and HasDBWProc() then ...
+
             local inModelForm = IsModelChangingForm()
+            -- Add check: if DBW is suspended, don't mess with it here unless we are definitely leaving form
             if inModelForm and not morphSuspended then
                 -- ENTERING a model-changing form
                 morphSuspended = true
@@ -6815,34 +7058,23 @@ do
             if unit ~= "player" then return end
             -- Model changed externally (Deathbringer's Will proc end, etc.)
             -- The DLL's MorphGuard detects descriptor mismatches automatically.
-            -- We only need to handle mount state transitions here.
+            
             local currentMounted = IsMounted() or false
             if currentMounted ~= lastKnownMounted then
                 lastKnownMounted = currentMounted
-                -- Mount/dismount doesn't need suspend/resume —
-                -- MorphGuard handles descriptor restoration automatically.
+                
+                -- FIX: Force re-send mount morph on transition to Mounted state.
+                -- This ensures that if the mount ID was cleared or not yet applied, it gets applied now.
+                if currentMounted then
+                    if TransmorpherCharacterState and TransmorpherCharacterState.MountDisplay and GetSettings().saveMountMorph then
+                         SendMorphCommand("MOUNT_MORPH:" .. TransmorpherCharacterState.MountDisplay)
+                    end
+                end
             end
             -- No action needed: DLL MorphGuard restores on next tick.
 
-        elseif event == "UNIT_AURA" then
-            local unit = ...
-            if unit ~= "player" then return end
-            -- Deathbringer's Will proc detection: suspend morph to show proc form
-            -- Only active when showDBWProc setting is enabled
-            local hasDBW = GetSettings().showDBWProc and HasDBWProc() or false
-            if hasDBW and not dbwSuspended then
-                -- DBW proc started: suspend morph so player sees the proc form
-                dbwSuspended = true
-                if not morphSuspended and not vehicleSuspended then
-                    SendRawMorphCommand("SUSPEND")
-                end
-            elseif not hasDBW and dbwSuspended then
-                -- DBW proc ended: resume morph if shapeshift isn't also suspending
-                dbwSuspended = false
-                if not morphSuspended and not vehicleSuspended then
-                    SendRawMorphCommand("RESUME")
-                end
-            end
+        -- REMOVED UNIT_AURA DBW CHECK (Setting removed, handled by DLL only)
+        -- elseif event == "UNIT_AURA" then ...
 
         elseif event == "UNIT_INVENTORY_CHANGED" then
             local unit = ...
@@ -6897,7 +7129,8 @@ do
                 vehicleSuspended = true
                 if TransmorpherCharacterState and TransmorpherCharacterState.MountDisplay then
                     savedMountDisplayForVehicle = TransmorpherCharacterState.MountDisplay
-                    TRANSMORPHER_CMD = "MOUNT_RESET|SUSPEND"
+                    -- Use safe command sending
+                    SendRawMorphCommand("MOUNT_RESET|SUSPEND")
                     TransmorpherCharacterState.MountDisplay = nil
                 else
                     SendRawMorphCommand("SUSPEND")
@@ -6912,7 +7145,8 @@ do
                 vehicleSuspended = false
                 if savedMountDisplayForVehicle then
                     TransmorpherCharacterState.MountDisplay = savedMountDisplayForVehicle
-                    TRANSMORPHER_CMD = "MOUNT_MORPH:" .. savedMountDisplayForVehicle .. "|RESUME"
+                    -- Use safe command sending
+                    SendMorphCommand("MOUNT_MORPH:" .. savedMountDisplayForVehicle .. "|RESUME")
                     savedMountDisplayForVehicle = nil
                     UpdateSpecialSlots()
                 else
@@ -6920,10 +7154,33 @@ do
                 end
             end
 
+        elseif event == "BARBER_SHOP_OPEN" then
+            SendRawMorphCommand("SUSPEND")
+            
+        elseif event == "BARBER_SHOP_CLOSE" then
+            SendRawMorphCommand("RESUME")
+
         elseif event == "CHAT_MSG_ADDON" then
             local prefix, msg, channel, sender = ...
             if (prefix == addonMessagePrefix or prefix == "DressMe") then
                 -- Reserved for future appearance sharing
+            end
+        end
+    end)
+end
+
+---------------- AUTO-UNSHIFT ON MOUNT ERROR ----------------
+do
+    local f = CreateFrame("Frame")
+    f:RegisterEvent("UI_ERROR_MESSAGE")
+    f:SetScript("OnEvent", function(self, event, msg)
+        -- Check for standard "Can't mount while shapeshifted" errors
+        if msg == ERR_MOUNT_SHAPESHIFTED or msg == ERR_NOT_WHILE_SHAPESHIFTED then
+            -- If we are in a form, cancel it (only works out of combat due to protection)
+            if GetShapeshiftForm() > 0 and not InCombatLockdown() then
+                CancelShapeshiftForm()
+                -- Note: We cannot automatically retry the mount cast because it requires a hardware event (click/keypress)
+                -- The user will need to press the mount key again, but at least they are now unshifted.
             end
         end
     end)
@@ -6944,28 +7201,33 @@ do
         
         -- Smart Check for passenger seat mounts/units/objects
         if not inVehicle then
-            local seatCount = UnitVehicleSeatCount("target")
-            if seatCount and seatCount > 0 then
-                inVehicle = true 
-            else
-                local name = UnitName("target") or ""
-                local patterns = {
-                    "Chopper", "Salvaged", "Demolisher", "Siege", "Engine", "Cannon", "Canon", "Harpoon",
-                    "Turret", "Teleporter", "Drake", "Dragon", "Tank", "Golem", "Robot", "Machine", 
-                    "Plane", "Ship", "Boat", "Zeppelin", "Bomber", "Steam", "Flame", 
-                    "Leviathan", "Mimiron", "Gryphon", "Wyvern", "Bat", "Hawkstrider", "Catapult", 
-                    "Car", "Shuttle", "Submarine", "Valkyrie", "Mammoth", "Motor", "Bike", "Cycle", 
-                    "Rider", "Pilot", "Gunner", "Azure", "Amber", "Emerald", "Scion", "Proto-Drake", 
-                    "Aerial", "Command", "Platform", "Guardian", "Sentinel", "Constructor", 
-                    "Mechano", "Turbo", "Automatic", "Flying", "Hover", "Glider", "Sled", "Rocket", 
-                    "Blimp", "Balloon", "Gnome", "Goblin", "Experimental", "Constructor", "Security", 
-                    "Defense", "Assault", "War", "Combat", "Battle", "Transport", "Portal", 
-                    "Focus", "Nexus", "Pulse", "Energy", "Beam", "Static", "Launcher", "Ram"
-                }
-                for _, p in ipairs(patterns) do
-                    if name:find(p) then
-                        inVehicle = true
-                        break
+            if UnitExists("target") then
+                local seatCount = UnitVehicleSeatCount("target")
+                if seatCount and seatCount > 0 then
+                    inVehicle = true 
+                else
+                    local name = UnitName("target") or ""
+                    local patterns = {
+                        "Chopper", "Salvaged", "Demolisher", "Siege", "Engine", "Cannon", "Canon", "Harpoon",
+                        "Turret", "Teleporter", "Drake", "Dragon", "Tank", "Golem", "Robot", "Machine", 
+                        "Plane", "Ship", "Boat", "Zeppelin", "Bomber", "Steam", "Flame", 
+                        "Leviathan", "Mimiron", "Gryphon", "Wyvern", "Bat", "Hawkstrider", "Catapult", 
+                        "Car", "Shuttle", "Submarine", "Valkyrie", "Mammoth", "Motor", "Bike", "Cycle", 
+                        "Rider", "Pilot", "Gunner", "Azure", "Amber", "Emerald", "Scion", "Proto-Drake", 
+                        "Aerial", "Command", "Platform", "Guardian", "Sentinel", "Constructor", 
+                        "Mechano", "Turbo", "Automatic", "Flying", "Hover", "Glider", "Sled", "Rocket", 
+                        "Blimp", "Balloon", "Gnome", "Goblin", "Experimental", "Constructor", "Security", 
+                        "Defense", "Assault", "War", "Combat", "Battle", "Transport", "Portal", 
+                        "Focus", "Nexus", "Pulse", "Energy", "Beam", "Static", "Launcher", "Ram",
+                        "Stabled Thunder Bluff Kodo", "Stabled Darkspear Raptor", "Stabled Forsaken Warhorse",
+                        "Stabled Orgrimmar Wolf", "Stabled Silvermoon Hawkstrider", "Stabled Sunreaver Hawkstrider",
+                        "Stabled Argent Warhorse"
+                    }
+                    for _, p in ipairs(patterns) do
+                        if name:find(p) then
+                            inVehicle = true
+                            break
+                        end
                     end
                 end
             end
@@ -6978,10 +7240,11 @@ do
                 vehicleSuspended = true
                 if TransmorpherCharacterState and TransmorpherCharacterState.MountDisplay then
                     savedMountDisplayForVehicle = TransmorpherCharacterState.MountDisplay
-                    TRANSMORPHER_CMD = "MOUNT_RESET|SUSPEND"
+                    -- Use safe command sending
+                    SendRawMorphCommand("MOUNT_RESET|SUSPEND")
                     TransmorpherCharacterState.MountDisplay = nil
                 else
-                    TRANSMORPHER_CMD = "SUSPEND"
+                    SendRawMorphCommand("SUSPEND")
                 end
             end
         elseif not inVehicle and wasInVehicleLastFrame then
@@ -6991,11 +7254,12 @@ do
                 vehicleSuspended = false
                 if savedMountDisplayForVehicle then
                     TransmorpherCharacterState.MountDisplay = savedMountDisplayForVehicle
-                    TRANSMORPHER_CMD = "MOUNT_MORPH:" .. savedMountDisplayForVehicle .. "|RESUME"
+                    -- Use safe command sending
+                    SendMorphCommand("MOUNT_MORPH:" .. savedMountDisplayForVehicle .. "|RESUME")
                     savedMountDisplayForVehicle = nil
                     UpdateSpecialSlots()
                 else
-                    TRANSMORPHER_CMD = "RESUME"
+                    SendRawMorphCommand("RESUME")
                 end
             end
         end
@@ -7195,4 +7459,4 @@ do
 end
 
 -- Print load message
-DEFAULT_CHAT_FRAME:AddMessage("|cffF5C842⚔ Transmorpher|r v1.1.2 loaded — |cffC8AA6E/morph|r or click the button on your character model.")
+DEFAULT_CHAT_FRAME:AddMessage("|cffF5C842⚔ Transmorpher|r v1.1.4 loaded — |cffC8AA6E/morph|r or click the button on your character model.")

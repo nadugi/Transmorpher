@@ -1,10 +1,10 @@
 ## Interface: 30300
 ## Author: Kirazul
 ## Title: Transmorpher
-## Notes: Client-side Transmog system for WotLK 3.3.5a. Requires dinput8.dll. v1.1.2: Title fix and UI improvements.
+## Notes: Client-side Transmog system for WotLK 3.3.5a. Requires dinput8.dll (or Universal Proxy). v1.1.4: Per-Character Settings & DBW Fixes.
 ## SavedVariables: TransmorpherSavedLooks, TransmorpherMorphFavorites, TransmorpherSettings, TransmorpherLoadoutsAccount
-## SavedVariablesPerCharacter: TransmorpherCharacterState
-## Version: 1.1.2
+## SavedVariablesPerCharacter: TransmorpherCharacterState, TransmorpherSettingsPerChar
+## Version: 1.1.4
 
 db\ItemsDB.lua
 db\ItemsAPI.lua
