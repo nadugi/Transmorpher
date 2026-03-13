@@ -149,6 +149,8 @@ void __declspec(naked) MountDisplayHook()
         mov dword ptr [g_origMount], ecx
         cmp dword ptr [g_morphMount], 0
         je do_original
+        cmp dword ptr [g_morphMount], 0x00FFFFFF
+        ja do_original
         mov ecx, dword ptr [g_morphMount]
         jmp do_original
 

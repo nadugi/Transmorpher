@@ -42,6 +42,9 @@ uint32_t g_showDBW = 1;
 uint32_t g_showMeta = 1;
 uint32_t g_keepShapeshift = 0;
 
+// Multiplayer Sync Data
+std::unordered_map<uint64_t, RemoteMorph> g_remoteMorphs;
+
 // Debug
 uint32_t g_debugLastDisplayID = 0;
 
@@ -142,7 +145,7 @@ void ReStampWeapons(WowObject* player) {
 
 static bool IsTitleKnown(WowObject* player, uint32_t titleId) {
     if (!player || !player->descriptors || titleId == 0) return false;
-    uint32_t* known = (uint32_t*)((uint8_t*)player->descriptors + PLAYER_FIELD_KNOWN_TITLES);
+    uint32_t* known = (uint32_t*)((uintptr_t)player->descriptors + PLAYER_FIELD_KNOWN_TITLES);
     int idx = titleId / 32;
     if (idx >= 6) return false;
     return (known[idx] & (1 << (titleId % 32))) != 0;
@@ -150,7 +153,7 @@ static bool IsTitleKnown(WowObject* player, uint32_t titleId) {
 
 static void SetTitleKnown(WowObject* player, uint32_t titleId, bool known) {
     if (!player || !player->descriptors || titleId == 0) return;
-    uint32_t* arr = (uint32_t*)((uint8_t*)player->descriptors + PLAYER_FIELD_KNOWN_TITLES);
+    uint32_t* arr = (uint32_t*)((uintptr_t)player->descriptors + PLAYER_FIELD_KNOWN_TITLES);
     int idx = titleId / 32;
     if (idx >= 6) return;
     uint32_t mask = (1 << (titleId % 32));
@@ -251,6 +254,7 @@ void ResetAllMorphs(bool forceClearOnly) {
         g_hasMorph = false;
         g_suspended = false;
         g_saved = false;
+        g_remoteMorphs.clear();
         return;
     }
 
@@ -312,6 +316,79 @@ void ResetAllMorphs(bool forceClearOnly) {
 
 bool DoMorph(const char* cmd, WowObject* player) {
     if (!player) return false;
+
+    // Handle Remote Morphing (Multiplayer Sync)
+    // Format: REMOTE:GUID:SUB_COMMAND
+    if (strncmp(cmd, "REMOTE:", 7) == 0) {
+        uint64_t remoteGuid = 0;
+        const char* guidStr = cmd + 7;
+        char* endPtr = nullptr;
+        
+        // WoW GUIDs are hex strings (sometimes starting with 0x)
+        remoteGuid = strtoull(guidStr, &endPtr, 16);
+        
+        if (remoteGuid != 0 && endPtr && *endPtr == ':') {
+            // Find or create remote state
+            RemoteMorph& rm = g_remoteMorphs[remoteGuid];
+            rm.lastSeen = GetTickCount64();
+
+            const char* s = endPtr + 1;
+            if (strncmp(s, "MORPH:", 6) == 0) {
+                rm.displayId = (uint32_t)atoi(s + 6);
+                Log("Remote GUID %llX: Morph set to %u", remoteGuid, rm.displayId);
+            }
+            else if (strncmp(s, "SCALE:", 6) == 0) {
+                rm.scale = (float)atof(s + 6);
+                Log("Remote GUID %llX: Scale set to %.2f", remoteGuid, rm.scale);
+            }
+            else if (strncmp(s, "ITEM:", 5) == 0) {
+                int slot = 0; uint32_t itemId = 0;
+                if (sscanf_s(s + 5, "%d:%u", &slot, &itemId) == 2) {
+                    if (slot >= 1 && slot <= 19) {
+                        rm.items[slot] = itemId;
+                        rm.unmorphRelease[slot] = false; // Cancel any pending unmorph
+                        Log("Remote GUID %llX: Slot %d set to item %u", remoteGuid, slot, itemId);
+                    }
+                }
+            }
+            else if (strncmp(s, "UNMORPH:", 8) == 0) {
+                int slot = atoi(s + 8);
+                if (slot >= 1 && slot <= 19) {
+                    rm.unmorphRelease[slot] = true;
+                    Log("Remote GUID %llX: Scheduled release for slot %d", remoteGuid, slot);
+                }
+            }
+            else if (strncmp(s, "ENCHANT_MH:", 11) == 0) rm.enchantMH = (uint32_t)atoi(s + 11);
+            else if (strncmp(s, "ENCHANT_OH:", 11) == 0) rm.enchantOH = (uint32_t)atoi(s + 11);
+            else if (strncmp(s, "MOUNT:", 6) == 0) {
+                int mountIdSigned = atoi(s + 6);
+                rm.mountId = (mountIdSigned > 0) ? (uint32_t)mountIdSigned : 0;
+            }
+            else if (strncmp(s, "PET:", 4) == 0) rm.petId = (uint32_t)atoi(s + 4);
+            else if (strncmp(s, "HPET:", 5) == 0) rm.hPetId = (uint32_t)atoi(s + 5);
+            else if (strncmp(s, "HPET_SCALE:", 11) == 0) rm.hPetScale = (float)atof(s + 11);
+            else if (strncmp(s, "TITLE:", 6) == 0) rm.titleId = (uint32_t)atoi(s + 6);
+            else if (strncmp(s, "RESET", 5) == 0) {
+                rm.displayId = 0;
+                rm.scale = 0.0f;
+                rm.enchantMH = 0;
+                rm.enchantOH = 0;
+                rm.mountId = 0;
+                rm.petId = 0;
+                rm.hPetId = 0;
+                rm.titleId = 0;
+                memset(rm.items, 0, sizeof(rm.items));
+                memset(rm.unmorphRelease, 0, sizeof(rm.unmorphRelease));
+                Log("Remote GUID %llX: Reset requested", remoteGuid);
+            }
+            
+            return false; // Don't trigger local player update
+        } else {
+            Log("Failed to parse remote GUID from: %s", guidStr);
+        }
+        return false;
+    }
+
     SaveOriginals(player);
     RefreshOriginals(player); 
 
@@ -404,10 +481,15 @@ bool DoMorph(const char* cmd, WowObject* player) {
         }
     }
     else if (strncmp(cmd, "MOUNT_MORPH:", 12) == 0) {
-        uint32_t id = (uint32_t)atoi(cmd + 12);
+        int mountIdSigned = atoi(cmd + 12);
+        uint32_t id = (mountIdSigned > 0) ? (uint32_t)mountIdSigned : 0;
         g_morphMount = id;
         if (!g_suspended) {
-            *(uint32_t*)(desc + UNIT_FIELD_MOUNTDISPLAYID) = id;
+            if (id > 0) {
+                *(uint32_t*)(desc + UNIT_FIELD_MOUNTDISPLAYID) = id;
+            } else {
+                *(uint32_t*)(desc + UNIT_FIELD_MOUNTDISPLAYID) = g_origMount;
+            }
             update = true;
         }
     }
@@ -773,7 +855,7 @@ skip_character_morph:
     }
 
     // --- Mount morph guard ---
-    if (g_morphMount > 0) {
+    if (g_morphMount > 0 && g_morphMount <= 0x00FFFFFF) {
         __try {
             uint32_t curMount = *(uint32_t*)(desc + UNIT_FIELD_MOUNTDISPLAYID);
             // Only enforce if we are actually mounted (display id > 0)
@@ -799,5 +881,271 @@ skip_character_morph:
         ApplyMorphState(player);
         if (CGUnit_UpdateDisplayInfo) __try { CGUnit_UpdateDisplayInfo(player, 1); } __except(1) {}
         ReStampWeapons(player);
+    }
+}
+
+void GetNearbyPlayers(uint64_t playerGuid, char* outBuffer, size_t maxLen) {
+    int count = 0;
+    if (maxLen > 0) outBuffer[0] = '\0';
+    
+    __try {
+        uint32_t clientConnection = *(uint32_t*)P_CLIENT_CONNECTION;
+        if (!clientConnection) return;
+        uint32_t objMgr = *(uint32_t*)(clientConnection + 0x2ED0);
+        if (!objMgr) return;
+        
+        uint32_t objPtr = *(uint32_t*)(objMgr + 0xAC);
+        while (objPtr != 0 && (objPtr % 2 == 0)) {
+            WowObject* current = (WowObject*)objPtr;
+            
+            if (current->descriptors) {
+                uint8_t* desc = (uint8_t*)current->descriptors;
+                uint32_t typeMask = ((uint32_t*)desc)[2]; // OBJECT_FIELD_TYPE is at index 2
+                
+                // Only process players (TYPEMASK_PLAYER = 0x10 = 16)
+                if ((typeMask & 16) != 0) {
+                    uint64_t guid = *(uint64_t*)(desc); // OBJECT_FIELD_GUID is at offset 0
+                    
+                    // Exclude local player
+                    if (guid != playerGuid) {
+                        if (current->vtable) {
+                            typedef const char* (__thiscall* GetObjectName_fn)(WowObject*);
+                            GetObjectName_fn fn = *(GetObjectName_fn*)(current->vtable + 54 * 4);
+                            if (fn) {
+                                const char* name = nullptr;
+                                __try { name = fn(current); } __except(1) {}
+                                
+                                if (name && name[0] != '\0' && strcmp(name, "Unknown") != 0 && strcmp(name, "UNKNOWN") != 0) {
+                                    if (count > 0) strcat_s(outBuffer, maxLen, ",");
+                                    strcat_s(outBuffer, maxLen, name);
+                                    count++;
+                                    
+                                    // Limit to 50 players to keep Lua string manageable
+                                    if (count >= 50) break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            objPtr = *(uint32_t*)(objPtr + 0x3C); // nextObject is at offset 0x3C
+        }
+    } __except(1) {}
+}
+
+void RemoteMorphGuard() {
+    if (g_remoteMorphs.empty() || !IsInWorld()) return;
+
+    uint64_t now = GetTickCount64();
+    static uint64_t lastLogTime = 0;
+    bool debugLog = (now - lastLogTime > 5000);
+    if (debugLog) {
+        lastLogTime = now;
+    }
+
+    for (auto& pair : g_remoteMorphs) {
+        uint64_t guid = pair.first;
+        RemoteMorph& rm = pair.second;
+
+        // 1. Process the Player/Unit itself
+        WowObject* current = GetObjectPtr(guid, 0x18, __FILE__, __LINE__);
+        if (current && current->descriptors) {
+            uint8_t* desc = (uint8_t*)current->descriptors;
+            bool changed = false;
+
+            // Apply DisplayID
+            if (rm.displayId > 0 && *(uint32_t*)(desc + UNIT_FIELD_DISPLAYID) != rm.displayId) {
+                *(uint32_t*)(desc + UNIT_FIELD_DISPLAYID) = rm.displayId;
+                changed = true;
+            }
+
+            // Apply Scale
+            if (rm.scale > 0.1f) {
+                float curScale = *(float*)(desc + 0x10);
+                if (!rm.capturedScale) {
+                    rm.origScale = curScale;
+                    rm.capturedScale = true;
+                }
+                if (curScale < rm.scale - 0.01f || curScale > rm.scale + 0.01f) {
+                    *(float*)(desc + 0x10) = rm.scale;
+                    changed = true;
+                }
+            } else if (rm.scale <= 0.1f && rm.capturedScale) {
+                *(float*)(desc + 0x10) = rm.origScale;
+                rm.capturedScale = false;
+                changed = true;
+            }
+
+            // Apply Items
+            for (int s = 1; s <= 19; s++) {
+                if (rm.items[s] > 0) {
+                    uint32_t off = GetVisibleItemField(s);
+                    if (off) {
+                        uint32_t writeVal = rm.items[s];
+                        if (writeVal == 4294967295) writeVal = 0; // Explicit hide
+                        
+                        if (*(uint32_t*)(desc + off) != writeVal) {
+                            *(uint32_t*)(desc + off) = writeVal;
+                            changed = true;
+                        }
+                    }
+                    if (rm.unmorphRelease[s]) {
+                        rm.items[s] = 0;
+                        rm.unmorphRelease[s] = false;
+                    }
+                }
+            }
+
+            // Apply Enchants
+            if (rm.enchantMH > 0) {
+                if (!rm.capturedEnchantMH) {
+                    rm.origEnchantMH = ReadVisibleEnchant(current, 16);
+                    rm.capturedEnchantMH = true;
+                }
+                if (ReadVisibleEnchant(current, 16) != rm.enchantMH) {
+                    WriteVisibleEnchant(current, 16, rm.enchantMH);
+                    changed = true;
+                }
+            } else if (rm.enchantMH == 0 && rm.capturedEnchantMH) {
+                WriteVisibleEnchant(current, 16, rm.origEnchantMH);
+                rm.capturedEnchantMH = false;
+                changed = true;
+            }
+
+            if (rm.enchantOH > 0) {
+                if (!rm.capturedEnchantOH) {
+                    rm.origEnchantOH = ReadVisibleEnchant(current, 17);
+                    rm.capturedEnchantOH = true;
+                }
+                if (ReadVisibleEnchant(current, 17) != rm.enchantOH) {
+                    WriteVisibleEnchant(current, 17, rm.enchantOH);
+                    changed = true;
+                }
+            } else if (rm.enchantOH == 0 && rm.capturedEnchantOH) {
+                WriteVisibleEnchant(current, 17, rm.origEnchantOH);
+                rm.capturedEnchantOH = false;
+                changed = true;
+            }
+
+            // Apply Title
+            if (rm.titleId > 0) {
+                if (!rm.capturedTitle) {
+                    rm.origTitleId = *(uint32_t*)(desc + PLAYER_FIELD_CHOSEN_TITLE);
+                    rm.capturedTitle = true;
+                }
+                if (*(uint32_t*)(desc + PLAYER_FIELD_CHOSEN_TITLE) != rm.titleId) {
+                    *(uint32_t*)(desc + PLAYER_FIELD_CHOSEN_TITLE) = rm.titleId;
+                    changed = true;
+                }
+            } else if (rm.titleId == 0 && rm.capturedTitle) {
+                *(uint32_t*)(desc + PLAYER_FIELD_CHOSEN_TITLE) = rm.origTitleId;
+                rm.capturedTitle = false;
+                changed = true;
+            }
+
+            // Apply Mount
+            if (rm.mountId > 0) {
+                if (!rm.capturedMount) {
+                    rm.origMountId = *(uint32_t*)(desc + UNIT_FIELD_MOUNTDISPLAYID);
+                    rm.capturedMount = true;
+                }
+                if (*(uint32_t*)(desc + UNIT_FIELD_MOUNTDISPLAYID) != rm.mountId) {
+                    *(uint32_t*)(desc + UNIT_FIELD_MOUNTDISPLAYID) = rm.mountId;
+                    changed = true;
+                }
+            } else if (rm.mountId == 0 && rm.capturedMount) {
+                *(uint32_t*)(desc + UNIT_FIELD_MOUNTDISPLAYID) = rm.origMountId;
+                rm.capturedMount = false;
+                changed = true;
+            }
+
+            if (changed && CGUnit_UpdateDisplayInfo) {
+                __try { CGUnit_UpdateDisplayInfo((void*)(uintptr_t)current, 1); } __except(EXCEPTION_EXECUTE_HANDLER) {}
+            }
+
+            // 2. Process Pets (HPET / PET)
+            // HPET (Combat Pet)
+            uint64_t petGuid = *(uint64_t*)(desc + UNIT_FIELD_SUMMON);
+            if (petGuid != 0) {
+                WowObject* pet = GetObjectPtr(petGuid, 0x08, __FILE__, __LINE__);
+                if (pet && pet->descriptors) {
+                    uint8_t* pdesc = (uint8_t*)pet->descriptors;
+                    bool pchanged = false;
+                    
+                    if (rm.hPetId > 0) {
+                        if (!rm.capturedHPet) {
+                            rm.origHPetId = *(uint32_t*)(pdesc + UNIT_FIELD_DISPLAYID);
+                            rm.capturedHPet = true;
+                        }
+                        if (*(uint32_t*)(pdesc + UNIT_FIELD_DISPLAYID) != rm.hPetId) {
+                            *(uint32_t*)(pdesc + UNIT_FIELD_DISPLAYID) = rm.hPetId;
+                            pchanged = true;
+                        }
+                    } else if (rm.hPetId == 0 && rm.capturedHPet) {
+                        *(uint32_t*)(pdesc + UNIT_FIELD_DISPLAYID) = rm.origHPetId;
+                        rm.capturedHPet = false;
+                        pchanged = true;
+                    }
+
+                    if (rm.hPetScale > 0.1f) {
+                        if (!rm.capturedHPetScale) {
+                            rm.origHPetScale = *(float*)(pdesc + 0x10);
+                            rm.capturedHPetScale = true;
+                        }
+                        float curPScale = *(float*)(pdesc + 0x10);
+                        if (curPScale < rm.hPetScale - 0.01f || curPScale > rm.hPetScale + 0.01f) {
+                            *(float*)(pdesc + 0x10) = rm.hPetScale;
+                            pchanged = true;
+                        }
+                    } else if (rm.hPetScale <= 0.1f && rm.capturedHPetScale) {
+                        *(float*)(pdesc + 0x10) = rm.origHPetScale;
+                        rm.capturedHPetScale = false;
+                        pchanged = true;
+                    }
+
+                    if (pchanged && CGUnit_UpdateDisplayInfo) {
+                        __try { CGUnit_UpdateDisplayInfo((void*)(uintptr_t)pet, 1); } __except(EXCEPTION_EXECUTE_HANDLER) {}
+                    }
+                }
+            }
+
+            // PET (Companion)
+            uint64_t critterGuid = *(uint64_t*)(desc + UNIT_FIELD_CRITTER);
+            if (critterGuid != 0) {
+                WowObject* critter = GetObjectPtr(critterGuid, 0x08, __FILE__, __LINE__);
+                if (critter && critter->descriptors) {
+                    uint8_t* cdesc = (uint8_t*)critter->descriptors;
+                    
+                    if (rm.petId > 0) {
+                        if (!rm.capturedPet) {
+                            rm.origPetId = *(uint32_t*)(cdesc + UNIT_FIELD_DISPLAYID);
+                            rm.capturedPet = true;
+                        }
+                        if (*(uint32_t*)(cdesc + UNIT_FIELD_DISPLAYID) != rm.petId) {
+                            *(uint32_t*)(cdesc + UNIT_FIELD_DISPLAYID) = rm.petId;
+                            if (CGUnit_UpdateDisplayInfo) {
+                                __try { CGUnit_UpdateDisplayInfo((void*)(uintptr_t)critter, 1); } __except(EXCEPTION_EXECUTE_HANDLER) {}
+                            }
+                        }
+                    } else if (rm.petId == 0 && rm.capturedPet) {
+                        *(uint32_t*)(cdesc + UNIT_FIELD_DISPLAYID) = rm.origPetId;
+                        rm.capturedPet = false;
+                        if (CGUnit_UpdateDisplayInfo) {
+                            __try { CGUnit_UpdateDisplayInfo((void*)(uintptr_t)critter, 1); } __except(EXCEPTION_EXECUTE_HANDLER) {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Cleanup old remote morphs (10 minute timeout)
+    static uint64_t lastCleanup = 0;
+    if (now - lastCleanup > 30000) {
+        for (auto it = g_remoteMorphs.begin(); it != g_remoteMorphs.end();) {
+            if (now - it->second.lastSeen > 600000) it = g_remoteMorphs.erase(it);
+            else ++it;
+        }
+        lastCleanup = now;
     }
 }

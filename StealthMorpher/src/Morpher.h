@@ -29,3 +29,38 @@ extern uint32_t g_keepShapeshift;
 
 // Debug
 extern uint32_t g_debugLastDisplayID;
+
+// ================================================================
+// MULTIPLAYER SYNC DATA
+// ================================================================
+struct RemoteMorph {
+    uint32_t displayId = 0;
+    uint32_t items[20] = {0};
+    float scale = 0.0f;
+    uint32_t enchantMH = 0;
+    uint32_t enchantOH = 0;
+    uint32_t mountId = 0;
+    uint32_t petId = 0;
+    uint32_t hPetId = 0;
+    float hPetScale = 0.0f;
+    uint32_t titleId = 0;
+
+    // Cache to restore native visual when a morph is dropped
+    bool capturedScale = false; float origScale = 1.0f;
+    bool capturedEnchantMH = false; uint32_t origEnchantMH = 0;
+    bool capturedEnchantOH = false; uint32_t origEnchantOH = 0;
+    bool capturedMount = false; uint32_t origMountId = 0;
+    bool capturedPet = false; uint32_t origPetId = 0;
+    bool capturedHPet = false; uint32_t origHPetId = 0;
+    bool capturedHPetScale = false; float origHPetScale = 1.0f;
+    bool capturedTitle = false; uint32_t origTitleId = 0;
+    uint64_t lastSeen = 0;
+    bool unmorphRelease[20] = {false};
+};
+
+#include <unordered_map>
+#include <string>
+extern std::unordered_map<uint64_t, RemoteMorph> g_remoteMorphs;
+
+void RemoteMorphGuard();
+void GetNearbyPlayers(uint64_t playerGuid, char* outBuffer, size_t maxLen);

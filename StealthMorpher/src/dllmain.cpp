@@ -87,10 +87,11 @@ static VOID CALLBACK MorphTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWOR
             stable = true;
         }
 
-        // Run MorphGuard immediately for visual enforcement
+        // Run MorphGuard handles local player, RemoteMorphGuard handles others
         if (player) {
             MorphGuard(player);
         }
+        RemoteMorphGuard();
 
         // Only process Lua commands and initialization if stable
         if (stable) {
@@ -151,6 +152,50 @@ static VOID CALLBACK MorphTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWOR
                     } else {
                         wow_lua_settop(L, -2); // Pop nil/empty
                     }
+                    
+                    // Handle Logging from Lua
+                    wow_lua_getfield(L, LUA_GLOBALSINDEX, "TRANSMORPHER_LOG");
+                    size_t logLen = 0;
+                    const char* logVal = wow_lua_tolstring(L, -1, &logLen);
+                    if (logVal && logLen > 0) {
+                        // We safely copy and log each line
+                        char logBuffer[8192];
+                        strncpy_s(logBuffer, sizeof(logBuffer), logVal, _TRUNCATE);
+                        wow_lua_settop(L, -2); // pop string
+                        
+                        if (FrameScript_Execute) {
+                            FrameScript_Execute("TRANSMORPHER_LOG = ''", "Transmorpher", 0);
+                        }
+                        
+                        char* next_log_token = nullptr;
+                        char* log_token = strtok_s(logBuffer, "\n", &next_log_token);
+                        while (log_token) {
+                            if (strlen(log_token) > 0) {
+                                Log("[Lua] %s", log_token);
+                            }
+                            log_token = strtok_s(nullptr, "\n", &next_log_token);
+                        }
+                    } else {
+                        wow_lua_settop(L, -2); // pop nil/empty
+                    }
+                    
+                    // Periodically export nearby players (every 1 second = 20 ticks of 50ms)
+                    static int s_nearbyPlayerTicks = 0;
+                    s_nearbyPlayerTicks++;
+                    if (s_nearbyPlayerTicks >= 20) {
+                        s_nearbyPlayerTicks = 0;
+                        if (g_lastPlayerGuid != 0) {
+                            char nearby[4096] = {0};
+                            GetNearbyPlayers(g_lastPlayerGuid, nearby, sizeof(nearby));
+                            char luaCmd[4096];
+                            sprintf_s(luaCmd, sizeof(luaCmd), "TRANSMORPHER_NEARBY = \"%s\"", nearby);
+                            if (FrameScript_Execute) {
+                                __try {
+                                    FrameScript_Execute(luaCmd, "Transmorpher", 0);
+                                } __except(1) {}
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -160,7 +205,6 @@ static VOID CALLBACK MorphTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWOR
 }
 
 static DWORD WINAPI StealthThread(LPVOID lpParam) {
-    SetupProxy();
     Log("Stealth thread started. Waiting for WoW window...");
     Sleep(8000);
 
@@ -210,6 +254,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         extern HMODULE g_hThisModule;
         g_hThisModule = hModule;
         DisableThreadLibraryCalls(hModule);
+        SetupProxy();
         CreateThread(nullptr, 0, StealthThread, nullptr, 0, nullptr);
         break;
     }

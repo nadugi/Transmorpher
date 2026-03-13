@@ -11,7 +11,10 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/Release)
 # Source files with absolute paths to avoid space issues
 set(SOURCES
     "${CMAKE_SOURCE_DIR}/src/dllmain.cpp"
-    "${CMAKE_SOURCE_DIR}/src/forwarders.cpp"
+    "${CMAKE_SOURCE_DIR}/src/Utils.cpp"
+    "${CMAKE_SOURCE_DIR}/src/Proxy.cpp"
+    "${CMAKE_SOURCE_DIR}/src/Hooks.cpp"
+    "${CMAKE_SOURCE_DIR}/src/Morpher.cpp"
 )
 
 # Create the DLL
@@ -30,7 +33,7 @@ set_target_properties(dinput8 PROPERTIES
 # Compiler flags for 32-bit build
 if(MSVC)
     # MSVC specific flags
-    target_compile_options(dinput8 PRIVATE /W3)
+    target_compile_options(dinput8 PRIVATE /W3 /MT)
     set_target_properties(dinput8 PROPERTIES
         LINK_FLAGS "/DEF:\"${CMAKE_SOURCE_DIR}/src/dinput8_exports.def\""
     )

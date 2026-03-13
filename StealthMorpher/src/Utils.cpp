@@ -180,17 +180,22 @@ void ForEachPlayerGuardian(uint64_t playerGuid, GuardianCallback cb, void* ctx) 
         uint32_t objPtr = *(uint32_t*)(objMgr + 0xAC);
         while (objPtr != 0 && objPtr % 2 == 0) {
             WowObject* current = (WowObject*)objPtr;
-            // Only process units (type 3), skip players (type 4)
-            if (current->objType == 3 && current->descriptors) {
+            
+            if (current->descriptors) {
                 uint8_t* desc = (uint8_t*)current->descriptors;
-                uint64_t summonedBy = *(uint64_t*)(desc + UNIT_FIELD_SUMMONEDBY);
-                uint64_t createdBy  = *(uint64_t*)(desc + UNIT_FIELD_CREATEDBY);
+                uint32_t typeMask = ((uint32_t*)desc)[2]; // OBJECT_FIELD_TYPE is at index 2
                 
-                if (summonedBy == playerGuid || createdBy == playerGuid) {
-                    cb(current, desc, ctx);
+                // Only process units (TYPEMASK_UNIT = 8) that are not players (TYPEMASK_PLAYER = 16)
+                if ((typeMask & 8) != 0 && (typeMask & 16) == 0) {
+                    uint64_t summonedBy = *(uint64_t*)(desc + UNIT_FIELD_SUMMONEDBY);
+                    uint64_t createdBy  = *(uint64_t*)(desc + UNIT_FIELD_CREATEDBY);
+                    
+                    if (summonedBy == playerGuid || createdBy == playerGuid) {
+                        cb(current, desc, ctx);
+                    }
                 }
             }
-            objPtr = (uint32_t)current->nextObject;
+            objPtr = *(uint32_t*)(objPtr + 0x3C); // nextObject is at offset 0x3C
         }
     } __except(1) {}
 }
