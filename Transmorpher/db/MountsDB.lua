@@ -329,4 +329,6 @@ ns.mountsDB = {
     { "White Kodo (BrewFest)",          49379,  14349,  "Creature\\Kodo\\Kodo.m2" },
     { "Great Brewfest Kodo", 49379, 24757, "Creature\\Kodo\\Kodo.m2" },
     { "Swift Zhevra",                    49322,  24693,  "Creature\\Zhevra\\Zhevra.m2" },
+    { "Reins of the Raven Lord",         41252,  15664,  "Creature\\DreadRaven\\DreadRaven.m2" },
+    { "Crusader's Black Warhorse",       68188,  29284,  "Creature\\Horse\\Horse.m2" },
 }
