@@ -2,7 +2,7 @@
 
 Transmorpher is a **client-side transmogrification system** for **World of Warcraft: Wrath of the Lich King (3.3.5a)** based on morphing.
 
-The addon allows players to locally modify their visual appearance without affecting gameplay or server-side data. All visual changes are applied **client-side only**, meaning other players will not see the modifications.
+The addon allows players to locally modify their visual appearance without affecting gameplay or server-side data. Visual changes are client-side by default, with an optional multiplayer synchronization mode that shares morph state with other users running Transmorpher.
 
 Transmorpher provides a powerful interface for customizing character appearance, equipment visuals, mounts, pets, and other cosmetic elements.
 
@@ -30,16 +30,32 @@ Additional functionality includes:
 - **Equipment visibility control**
 - **Weapon enchant morphing**
 - **Persistent appearance presets**
+- **Optional multiplayer synchronization** (world or group/raid-only)
 
 ---
 
 # Version
 
-Current release: **1.1.1**
+Current release: **1.1.5**
 
 ---
 
 # Changelog
+
+## 1.1.5
+- Added multiplayer synchronization controls in Settings with world/group modes
+- Improved mount morph backend stability and invalid mount-state recovery
+- Improved enchant preview behavior, including off-hand fallback handling
+
+## 1.1.3
+- **CRITICAL:** Fixed a crash caused by the Time Morph hook overwriting adjacent memory
+- **FIX:** Fixed morph reversion bug where players would revert to native race instead of morphed race after shapeshift/proc (DBW) expiry
+- **NEW:** Added **Universal Proxy** support: DLL can now be renamed to `version.dll` or `dsound.dll` for compatibility
+
+## 1.1.2
+- Fixed Title Morph name hiding bug
+- Fixed Sets Tab persistence issues
+- Fixed Misc Tab UI layout bugs
 
 ## 1.1.1
 
@@ -58,18 +74,20 @@ Current release: **1.1.1**
 
 1. Download the latest release:
    
-   https://github.com/Kirazul/Transmorpher/releases/tag/1.1.1
+   https://github.com/Kirazul/Transmorpher/releases
 
-2. Extract the addon folder into:
+2. Extract the addon folder into your Interface/AddOns directory.
 
-3. Launch the game and enable **Transmorpher** from the AddOns menu.
+3. Place `dinput8.dll` (or rename to `version.dll` / `dsound.dll`) next to your Wow.exe.
+
+4. Launch the game and enable **Transmorpher** from the AddOns menu.
 
 ---
 
 # Compatibility
 
 - World of Warcraft **Wrath of the Lich King 3.3.5a**
-- Client-side only functionality
+- Client-side functionality with optional addon-to-addon multiplayer sync
 - Does not modify server data
 
   
