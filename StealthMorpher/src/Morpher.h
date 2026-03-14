@@ -15,7 +15,10 @@ bool ApplyMorphState(WowObject* player);
 void ReStampWeapons(WowObject* player);
 void UpdateHasMorph();
 void ResetAllMorphs(bool forceClearOnly = false);
+void SoftResetState();
 void SetTime(float val);
+void SaveMountMorph();
+void LoadMountMorph();
 extern uint32_t g_morphDisplay;
 extern uint32_t g_morphItems[20];
 extern float g_morphScale;
@@ -64,3 +67,6 @@ extern std::unordered_map<uint64_t, RemoteMorph> g_remoteMorphs;
 
 void RemoteMorphGuard();
 void GetNearbyPlayers(uint64_t playerGuid, char* outBuffer, size_t maxLen);
+
+// ================================================================
+// MULTIPLAYER SYNC DATA

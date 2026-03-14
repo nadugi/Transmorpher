@@ -20,17 +20,21 @@ static bool g_luaLoadedSent = false;
 static bool g_wasInWorld = false;
 static int  g_worldStabilityTicks = 0;
 
+// DLL init status tracking for Lua feedback
+static const char* g_initStatus = "STARTING";
+static bool g_hookSuccess = false;
+
 static VOID CALLBACK MorphTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
     if (!g_running) return;
     if (!g_wowHwnd) return;
-    
+
     // Only run if we are in World
     if (!IsInWorld()) {
-        g_luaLoadedSent = false; 
+        g_luaLoadedSent = false;
         g_worldStabilityTicks = 0;
         if (g_wasInWorld) {
-            Log("Left world (Teleport/Reload/Logout) - Force clearing state");
-            ResetAllMorphs(true); // forceClearOnly = true
+            Log("Left world (Teleport/Reload/Logout) - Soft reset (preserving morph targets)");
+            SoftResetState(); // Keep morph targets so hooks work on re-enter
             extern DWORD g_playerDescBase;
             g_playerDescBase = 0; // Invalidate descriptor base immediately
             g_wasInWorld = false;
@@ -51,7 +55,7 @@ static VOID CALLBACK MorphTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWOR
 
         // Character change detection
         uint64_t currentGuid = GetPlayerGuid();
-        
+
         // Only run morph logic if we have a valid player and GUID
         if (currentGuid != 0 && player && player->descriptors) {
             if (currentGuid != g_lastPlayerGuid) {
@@ -79,7 +83,7 @@ static VOID CALLBACK MorphTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWOR
             g_worldStabilityTicks++;
             if (g_worldStabilityTicks >= 1) {
                 Log("Entered world (Login/Teleport/Reload complete)");
-                ResetAllMorphs(true); // Reset login/TP grace period and state
+                SoftResetState(); // Preserve morph targets, re-capture originals
                 g_wasInWorld = true;
                 stable = true;
             }
@@ -115,9 +119,19 @@ static VOID CALLBACK MorphTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWOR
 
                 if (FrameScript_Execute && needInit) {
                     FrameScript_Execute("TRANSMORPHER_DLL_LOADED = 'TRUE'", "Transmorpher", 0);
+
+                    // Report detailed status so addon can show diagnostics
+                    char statusCmd[512];
+                    sprintf_s(statusCmd, sizeof(statusCmd),
+                        "TRANSMORPHER_DLL_STATUS = {hooks=%s,status='%s'}",
+                        g_hookSuccess ? "true" : "false", g_initStatus);
+                    FrameScript_Execute(statusCmd, "Transmorpher", 0);
+
                     FrameScript_Execute("if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage('|cffffff00StealthMorpher|r initialized. Features: |cff00ff00ACTIVE|r') end", "Transmorpher", 0);
                     g_luaLoadedSent = true;
                     Log("Sent DLL_LOADED flag and welcome message to Lua");
+
+                    RegisterCustomLuaFunctions();
                 }
 
                 if (wow_lua_getfield && wow_lua_tolstring && wow_lua_settop) {
@@ -152,21 +166,20 @@ static VOID CALLBACK MorphTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWOR
                     } else {
                         wow_lua_settop(L, -2); // Pop nil/empty
                     }
-                    
+
                     // Handle Logging from Lua
                     wow_lua_getfield(L, LUA_GLOBALSINDEX, "TRANSMORPHER_LOG");
                     size_t logLen = 0;
                     const char* logVal = wow_lua_tolstring(L, -1, &logLen);
                     if (logVal && logLen > 0) {
-                        // We safely copy and log each line
                         char logBuffer[8192];
                         strncpy_s(logBuffer, sizeof(logBuffer), logVal, _TRUNCATE);
                         wow_lua_settop(L, -2); // pop string
-                        
+
                         if (FrameScript_Execute) {
                             FrameScript_Execute("TRANSMORPHER_LOG = ''", "Transmorpher", 0);
                         }
-                        
+
                         char* next_log_token = nullptr;
                         char* log_token = strtok_s(logBuffer, "\n", &next_log_token);
                         while (log_token) {
@@ -178,7 +191,7 @@ static VOID CALLBACK MorphTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWOR
                     } else {
                         wow_lua_settop(L, -2); // pop nil/empty
                     }
-                    
+
                     // Periodically export nearby players (every 1 second = 20 ticks of 50ms)
                     static int s_nearbyPlayerTicks = 0;
                     s_nearbyPlayerTicks++;
@@ -187,8 +200,20 @@ static VOID CALLBACK MorphTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWOR
                         if (g_lastPlayerGuid != 0) {
                             char nearby[4096] = {0};
                             GetNearbyPlayers(g_lastPlayerGuid, nearby, sizeof(nearby));
+                            char escaped[4096] = {0};
+                            int ei = 0;
+                            for (int ni = 0; nearby[ni] && ei < 4090; ni++) {
+                                char c = nearby[ni];
+                                if (c == '"' || c == '\\') {
+                                    escaped[ei++] = '\\';
+                                }
+                                if (c != '\n' && c != '\r') {
+                                    escaped[ei++] = c;
+                                }
+                            }
+                            escaped[ei] = '\0';
                             char luaCmd[4096];
-                            sprintf_s(luaCmd, sizeof(luaCmd), "TRANSMORPHER_NEARBY = \"%s\"", nearby);
+                            sprintf_s(luaCmd, sizeof(luaCmd), "TRANSMORPHER_NEARBY = \"%s\"", escaped);
                             if (FrameScript_Execute) {
                                 __try {
                                     FrameScript_Execute(luaCmd, "Transmorpher", 0);
@@ -206,41 +231,93 @@ static VOID CALLBACK MorphTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWOR
 
 static DWORD WINAPI StealthThread(LPVOID lpParam) {
     Log("Stealth thread started. Waiting for WoW window...");
-    Sleep(8000);
+    g_initStatus = "WAITING_WINDOW";
 
-    while (g_running) {
+    // Adaptive wait: poll every 500ms instead of sleeping 8s upfront
+    // Total timeout: 60 seconds
+    const int MAX_WAIT_MS = 60000;
+    const int POLL_MS = 500;
+    int waited = 0;
+
+    // Initial short delay to let the process settle
+    Sleep(2000);
+    waited += 2000;
+
+    while (g_running && waited < MAX_WAIT_MS) {
         g_wowHwnd = FindWindowA("GxWindowClass", NULL);
         if (g_wowHwnd) break;
         g_wowHwnd = FindWindowA("GxWindowClassD3d", NULL);
         if (g_wowHwnd) break;
-        Sleep(1000);
+        // Also try enumerating by process ID for unusual window classes
+        DWORD pid = GetCurrentProcessId();
+        HWND candidate = NULL;
+        while ((candidate = FindWindowExA(NULL, candidate, NULL, NULL)) != NULL) {
+            DWORD wndPid = 0;
+            GetWindowThreadProcessId(candidate, &wndPid);
+            if (wndPid == pid && IsWindowVisible(candidate)) {
+                char cls[64] = {0};
+                GetClassNameA(candidate, cls, sizeof(cls));
+                if (strstr(cls, "Gx") || strstr(cls, "WoW") || strstr(cls, "gx")) {
+                    g_wowHwnd = candidate;
+                    Log("Found WoW window via PID scan: class='%s'", cls);
+                    break;
+                }
+            }
+        }
+        if (g_wowHwnd) break;
+        Sleep(POLL_MS);
+        waited += POLL_MS;
     }
 
     if (!g_wowHwnd) {
-        Log("Could not find WoW window!");
+        Log("Could not find WoW window after %dms!", waited);
+        g_initStatus = "FAILED_NO_WINDOW";
         return 0;
     }
-    Log("Found WoW window: 0x%p", g_wowHwnd);
+    Log("Found WoW window: 0x%p (after %dms)", g_wowHwnd, waited);
 
     // Initialize offsets via pattern scanning
+    g_initStatus = "SCANNING";
     ScanOffsets();
 
+    // Load persisted mount morph BEFORE hooks install
+    // This ensures the hook has g_morphMount set when the game first
+    // writes the mount descriptor on login, fixing relog mount reset.
+    LoadMountMorph();
+
+    // Verify critical function pointers
+    if (!FrameScript_Execute) {
+        Log("CRITICAL: FrameScript_Execute not found! DLL cannot communicate with addon.");
+        g_initStatus = "FAILED_NO_LUA";
+        // Still install timer so we can retry if patterns update
+    }
+    if (!wow_lua_getfield || !wow_lua_tolstring || !wow_lua_settop) {
+        Log("WARNING: Some Lua API functions not found. Limited functionality.");
+    }
+
+    g_initStatus = "HOOKING";
+    bool mountHookOk = false;
     if (InstallMountHook()) {
         Log("Mount display hook installed successfully");
+        mountHookOk = true;
     } else {
         Log("WARNING: Failed to install mount display hook!");
     }
 
-    if (InstallUpdateDisplayInfoHook()) {
-        Log("UpdateDisplayInfo hook installed successfully");
-    } else {
-        Log("WARNING: Failed to install UpdateDisplayInfo hook!");
-    }
+    // UpdateDisplayInfo hook is currently disabled in code, just attempt it
+    InstallUpdateDisplayInfoHook();
 
-    // Install Timer on Main Thread (Fast 50ms interval for smooth visual updates)
-    SetTimer(g_wowHwnd, MORPH_TIMER_ID, 50, MorphTimerProc);
-    Log("Timer installed. Morpher active!");
-    
+    g_hookSuccess = mountHookOk;
+    g_initStatus = mountHookOk ? "ACTIVE" : "ACTIVE_NO_HOOKS";
+
+    // Install Timer on Main Thread
+    if (!SetTimer(g_wowHwnd, MORPH_TIMER_ID, 50, MorphTimerProc)) {
+        Log("CRITICAL: SetTimer failed! Error: %lu", GetLastError());
+        g_initStatus = "FAILED_NO_TIMER";
+        return 0;
+    }
+    Log("Timer installed. Morpher active! (init took %dms)", waited);
+
     while (g_running) {
         Sleep(1000);
     }
@@ -255,7 +332,13 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         g_hThisModule = hModule;
         DisableThreadLibraryCalls(hModule);
         SetupProxy();
-        CreateThread(nullptr, 0, StealthThread, nullptr, 0, nullptr);
+        HANDLE hThread = CreateThread(nullptr, 0, StealthThread, nullptr, 0, nullptr);
+        if (!hThread) {
+            Log("CRITICAL: Failed to create stealth thread! Error: %lu", GetLastError());
+            g_initStatus = "FAILED_NO_THREAD";
+        } else {
+            CloseHandle(hThread); // Don't leak handle
+        }
         break;
     }
     case DLL_PROCESS_DETACH:
@@ -264,15 +347,20 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             KillTimer(g_wowHwnd, MORPH_TIMER_ID);
             g_wowHwnd = nullptr;
         }
+        // Set bypass before unhooking so any in-flight hook execution passes through
+        extern volatile bool g_mountHookBypass;
+        g_mountHookBypass = true;
+        Sleep(100); // Let any in-flight hook execution drain
         UninstallMountHook();
+        UninstallUpdateDisplayInfoHook();
         UninstallTimeHook();
-        
+
         Sleep(50);
-        
+
         // Clear all pointers to prevent access violations
         extern DWORD g_playerDescBase;
         g_playerDescBase = 0;
-        
+
         Log("DLL detached cleanly");
         break;
     }

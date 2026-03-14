@@ -106,7 +106,7 @@ extern uint32_t g_morphEnchantOH;
 static DWORD g_mountHookAddr = 0;
 static bool  g_mountHookInstalled = false;
 static BYTE  g_mountHookOrigBytes[6] = {0};
-static volatile bool g_mountHookBypass = false;
+volatile bool g_mountHookBypass = false;
 
 // Combined Assembly Hook for Descriptor Writes (Mount & Title)
 // Hooking at: mov [eax+edx*4], ecx
@@ -143,15 +143,21 @@ void __declspec(naked) MountDisplayHook()
         cmp ecx, 0 // Dismount
         je do_original
 
-        cmp ecx, 0x00FFFFFF
-        ja do_original
-
         mov dword ptr [g_origMount], ecx
         cmp dword ptr [g_morphMount], 0
         je do_original
-        cmp dword ptr [g_morphMount], 0x00FFFFFF
+
+        // HIDDEN_SENTINEL support
+        cmp dword ptr [g_morphMount], 0xFFFFFFFF
+        je do_hide_mount
+
+        cmp dword ptr [g_morphMount], 0x01000000 // Max valid model ID approx
         ja do_original
         mov ecx, dword ptr [g_morphMount]
+        jmp do_original
+
+    do_hide_mount:
+        mov ecx, 0
         jmp do_original
 
     check_display_id:
@@ -335,20 +341,28 @@ bool InstallMountHook()
     BYTE* ptr = (BYTE*)g_mountHookAddr;
     __try {
         if (ptr[0] != 0x89 || ptr[1] != 0x0C || ptr[2] != 0x90) {
-            Log("ERROR: Mount hook pattern mismatch at %p", g_mountHookAddr);
+            Log("ERROR: Mount hook pattern mismatch at %p (got %02X %02X %02X)", (void*)g_mountHookAddr, ptr[0], ptr[1], ptr[2]);
+            g_mountHookAddr = 0;
             return false;
         }
         if (ptr[3] != 0x5D || ptr[4] != 0xC2) {
-             Log("ERROR: Mount hook epilogue mismatch at %p", g_mountHookAddr);
+             Log("ERROR: Mount hook epilogue mismatch at %p (got %02X %02X)", (void*)g_mountHookAddr, ptr[3], ptr[4]);
+             g_mountHookAddr = 0;
              return false;
         }
-    } __except(1) { return false; }
+    } __except(1) {
+        Log("ERROR: Exception verifying mount hook at %p", (void*)g_mountHookAddr);
+        g_mountHookAddr = 0;
+        return false;
+    }
 
     const int LEN = 5;
     memcpy(g_mountHookOrigBytes, (void*)g_mountHookAddr, LEN);
 
     DWORD oldProt;
     if (!VirtualProtect((void*)g_mountHookAddr, LEN, PAGE_EXECUTE_READWRITE, &oldProt)) {
+        Log("ERROR: VirtualProtect failed at %p (err=%lu)", (void*)g_mountHookAddr, GetLastError());
+        g_mountHookAddr = 0;
         return false;
     }
 
@@ -549,5 +563,12 @@ bool InstallUpdateDisplayInfoHook()
 }
 
 void UninstallUpdateDisplayInfoHook() {
-    // ...
+    if (!g_updateDisplayHookInstalled || !g_updateDisplayHookAddr) return;
+    DWORD oldProt;
+    if (VirtualProtect((void*)g_updateDisplayHookAddr, 5, PAGE_EXECUTE_READWRITE, &oldProt)) {
+        memcpy((void*)g_updateDisplayHookAddr, g_updateDisplayHookOrigBytes, 5);
+        VirtualProtect((void*)g_updateDisplayHookAddr, 5, oldProt, &oldProt);
+    }
+    g_updateDisplayHookInstalled = false;
+    Log("UpdateDisplayInfo hook uninstalled");
 }

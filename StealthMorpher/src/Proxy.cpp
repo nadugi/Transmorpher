@@ -73,6 +73,8 @@ void SetupProxy() {
             p_version[4] = GetProcAddress(hMod, "VerQueryValueA");
             p_version[5] = GetProcAddress(hMod, "VerQueryValueW");
             Log("Proxied version.dll");
+        } else {
+            Log("ERROR: Failed to load system version.dll from %s (err=%lu)", sysDir, GetLastError());
         }
     }
     else if (strstr(lowerName, "dsound.dll")) {
@@ -92,6 +94,8 @@ void SetupProxy() {
             p_dsound[10] = GetProcAddress(hMod, "DirectSoundCreate8");
             p_dsound[11] = GetProcAddress(hMod, "DirectSoundCaptureCreate8");
             Log("Proxied dsound.dll");
+        } else {
+            Log("ERROR: Failed to load system dsound.dll from %s (err=%lu)", sysDir, GetLastError());
         }
     }
     else {
@@ -105,6 +109,8 @@ void SetupProxy() {
             p_dinput8[3] = GetProcAddress(hMod, "GetdfDIMouse");
             p_dinput8[4] = GetProcAddress(hMod, "GetdfDIMouse2");
             Log("Proxied dinput8.dll");
+        } else {
+            Log("ERROR: Failed to load system dinput8.dll from %s (err=%lu)", sysDir, GetLastError());
         }
     }
 }

@@ -23,6 +23,28 @@ extern lua_tolstring_fn wow_lua_tolstring;
 typedef void (__cdecl* lua_settop_fn)(void* L, int idx);
 extern lua_settop_fn wow_lua_settop;
 
+// Additional Lua C API for function registration
+typedef double (__cdecl* lua_tonumber_fn)(void* L, int idx);
+extern lua_tonumber_fn wow_lua_tonumber;
+
+typedef void (__cdecl* lua_pushcclosure_fn)(void* L, void* fn, int n);
+extern lua_pushcclosure_fn wow_lua_pushcclosure;
+
+typedef void (__cdecl* lua_setfield_fn)(void* L, int idx, const char* k);
+extern lua_setfield_fn wow_lua_setfield;
+
+typedef void (__cdecl* lua_pushstring_fn)(void* L, const char* s);
+extern lua_pushstring_fn wow_lua_pushstring;
+
+typedef void (__cdecl* lua_pushnumber_fn)(void* L, double n);
+extern lua_pushnumber_fn wow_lua_pushnumber;
+
+typedef int (__cdecl* lua_gettop_fn)(void* L);
+extern lua_gettop_fn wow_lua_gettop;
+
+typedef int (__cdecl* lua_type_fn)(void* L, int idx);
+extern lua_type_fn wow_lua_type;
+
 // Update Display Info
 typedef void(__thiscall* UpdateDisplayInfo_fn)(void* thisPtr, uint32_t unk);
 extern UpdateDisplayInfo_fn CGUnit_UpdateDisplayInfo;
@@ -48,3 +70,25 @@ DWORD FindUpdateDisplayInfoHook(DWORD base);
 
 void ScanOffsets();
 bool IsInWorld();
+
+// DBC Reader for creature display info
+struct CreatureDisplayEntry {
+    uint32_t displayID;
+    uint32_t modelID;
+    float    modelScale;
+    char     texture1[128];
+    char     texture2[128];
+    char     texture3[128];
+};
+
+struct CreatureModelEntry {
+    uint32_t modelID;
+    char     modelPath[256];
+};
+
+bool LookupCreatureDisplay(uint32_t displayID, CreatureDisplayEntry* out);
+bool LookupCreatureModel(uint32_t modelID, CreatureModelEntry* out);
+
+// Lua function registration
+void RegisterCustomLuaFunctions();
+extern bool g_luaFunctionsRegistered;

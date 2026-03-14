@@ -52,6 +52,32 @@ static const uint32_t HIDDEN_SENTINEL = UINT32_MAX;
 static bool g_hasMorph = false;
 static int g_weaponRefreshTicks = 0;
 
+// ================================================================
+// Mount Morph Persistence — survive relog while mounted
+// ================================================================
+static const char* MOUNT_PERSIST_FILE = "transmorpher_mount.dat";
+
+void SaveMountMorph() {
+    FILE* f = fopen(MOUNT_PERSIST_FILE, "wb");
+    if (f) {
+        fwrite(&g_morphMount, sizeof(uint32_t), 1, f);
+        fclose(f);
+        Log("Mount morph persisted: %u", g_morphMount);
+    }
+}
+
+void LoadMountMorph() {
+    FILE* f = fopen(MOUNT_PERSIST_FILE, "rb");
+    if (f) {
+        uint32_t val = 0;
+        if (fread(&val, sizeof(uint32_t), 1, f) == 1 && val > 0) {
+            g_morphMount = val;
+            Log("Mount morph loaded from persistence: %u", val);
+        }
+        fclose(f);
+    }
+}
+
 void UpdateHasMorph() {
     g_hasMorph = false;
     if (g_morphDisplay > 0) { g_hasMorph = true; return; }
@@ -143,23 +169,7 @@ void ReStampWeapons(WowObject* player) {
     }
 }
 
-static bool IsTitleKnown(WowObject* player, uint32_t titleId) {
-    if (!player || !player->descriptors || titleId == 0) return false;
-    uint32_t* known = (uint32_t*)((uintptr_t)player->descriptors + PLAYER_FIELD_KNOWN_TITLES);
-    int idx = titleId / 32;
-    if (idx >= 6) return false;
-    return (known[idx] & (1 << (titleId % 32))) != 0;
-}
-
-static void SetTitleKnown(WowObject* player, uint32_t titleId, bool known) {
-    if (!player || !player->descriptors || titleId == 0) return;
-    uint32_t* arr = (uint32_t*)((uintptr_t)player->descriptors + PLAYER_FIELD_KNOWN_TITLES);
-    int idx = titleId / 32;
-    if (idx >= 6) return;
-    uint32_t mask = (1 << (titleId % 32));
-    if (known) arr[idx] |= mask;
-    else arr[idx] &= ~mask;
-}
+// IsTitleKnown and SetTitleKnown are defined in Utils.cpp
 
 bool ApplyMorphState(WowObject* player) {
     if (!player || !player->descriptors) return false;
@@ -233,23 +243,50 @@ bool ApplyMorphState(WowObject* player) {
     static bool g_justLoggedIn = false;
 static int g_loginTicks = 0;
 
+// Soft reset: only clear originals/saved flag but keep morph targets.
+// This allows the hook to continue intercepting descriptor writes with the
+// correct morph values across zone transitions, preventing mount/morph
+// resets that require remount/re-morph to fix.
+void SoftResetState() {
+    g_justLoggedIn = false;
+
+    // Clear captured originals so they get recaptured from new zone
+    g_origPetDisplay = 0; g_origHPetDisplay = 0;
+    g_origEnchantMH = 0; g_origEnchantOH = 0;
+    g_origTitle = 0;
+    g_origMount = 0; g_origDisplay = 0; g_origScale = 1.0f;
+    memset(g_origItems, 0, sizeof(g_origItems));
+
+    g_weaponRefreshTicks = 0;
+    g_suspended = false;
+    g_saved = false;
+
+    // DON'T clear morph targets (g_morphMount, g_morphDisplay, etc.)
+    // DON'T clear g_hasMorph
+    // DON'T clear remote morphs — they'll get refreshed by P2P
+
+    UpdateHasMorph(); // Recalculate from current morph targets
+    Log("Soft reset: originals cleared, morph targets preserved");
+}
+
 void ResetAllMorphs(bool forceClearOnly) {
     if (forceClearOnly) {
         g_justLoggedIn = false; // Reset login grace period
-        
+
         // Just clear internal state so we don't accidentally write old values
         g_morphDisplay = 0; g_morphScale = 0.0f; g_morphMount = 0;
         g_morphPet = 0; g_morphHPet = 0; g_morphHPetScale = 0.0f;
         g_morphEnchantMH = 0; g_morphEnchantOH = 0; g_morphTitle = 0;
-        
+        SaveMountMorph(); // Clear persistence on character change
+
         g_origPetDisplay = 0; g_origHPetDisplay = 0;
         g_origEnchantMH = 0; g_origEnchantOH = 0;
         g_origTitle = 0;
         g_origMount = 0; g_origDisplay = 0; g_origScale = 1.0f;
-        
+
         memset(g_origItems, 0, sizeof(g_origItems));
         memset(g_morphItems, 0, sizeof(g_morphItems));
-        
+
         g_weaponRefreshTicks = 0;
         g_hasMorph = false;
         g_suspended = false;
@@ -294,6 +331,7 @@ void ResetAllMorphs(bool forceClearOnly) {
     g_morphDisplay = 0; g_morphScale = 0.0f; g_morphMount = 0;
     g_morphPet = 0; g_morphHPet = 0; g_morphHPetScale = 0.0f;
     g_morphEnchantMH = 0; g_morphEnchantOH = 0; g_morphTitle = 0;
+    SaveMountMorph(); // Clear mount persistence on full reset
     
     g_origPetDisplay = 0; g_origHPetDisplay = 0;
     g_origEnchantMH = 0; g_origEnchantOH = 0;
@@ -470,11 +508,13 @@ bool DoMorph(const char* cmd, WowObject* player) {
             if (slot >= 1 && slot <= 19) {
                 uint32_t off = GetVisibleItemField(slot);
                 if (off) {
-                    g_morphItems[slot] = (itemId == 0) ? HIDDEN_SENTINEL : itemId;
+                    uint32_t normalized = (itemId == 0) ? HIDDEN_SENTINEL : itemId;
+                    bool morphChanged = (g_morphItems[slot] != normalized);
+                    g_morphItems[slot] = normalized;
                     if (!g_suspended) {
                         *(uint32_t*)(desc + off) = itemId;
                         update = true;
-                        if (slot >= 16 && slot <= 18) g_weaponRefreshTicks = 5;
+                        if (slot >= 16 && slot <= 18 && morphChanged) g_weaponRefreshTicks = 1;
                     }
                 }
             }
@@ -482,19 +522,30 @@ bool DoMorph(const char* cmd, WowObject* player) {
     }
     else if (strncmp(cmd, "MOUNT_MORPH:", 12) == 0) {
         int mountIdSigned = atoi(cmd + 12);
-        uint32_t id = (mountIdSigned > 0) ? (uint32_t)mountIdSigned : 0;
-        g_morphMount = id;
-        if (!g_suspended) {
-            if (id > 0) {
-                *(uint32_t*)(desc + UNIT_FIELD_MOUNTDISPLAYID) = id;
-            } else {
-                *(uint32_t*)(desc + UNIT_FIELD_MOUNTDISPLAYID) = g_origMount;
+        g_morphMount = (mountIdSigned == -1) ? HIDDEN_SENTINEL : ((mountIdSigned > 0) ? (uint32_t)mountIdSigned : 0);
+        SaveMountMorph(); // Persist for relog recovery
+
+        // If the player is currently mounted, force an immediate visual update
+        // so mount morph changes take effect without needing to remount.
+        if (!g_suspended && player && player->descriptors) {
+            uint8_t* d = (uint8_t*)player->descriptors;
+            uint32_t curMount = *(uint32_t*)(d + UNIT_FIELD_MOUNTDISPLAYID);
+            if (curMount > 0 && g_morphMount > 0) {
+                uint32_t target = (g_morphMount == HIDDEN_SENTINEL) ? 0 : g_morphMount;
+                if (curMount != target) {
+                    *(uint32_t*)(d + UNIT_FIELD_MOUNTDISPLAYID) = target;
+                    if (CGUnit_UpdateDisplayInfo) {
+                        __try { CGUnit_UpdateDisplayInfo(player, 1); } __except(1) {}
+                    }
+                    Log("Mount morph applied live: %u -> %u", curMount, target);
+                }
             }
-            update = true;
         }
+        update = false;
     }
     else if (strncmp(cmd, "MOUNT_RESET", 11) == 0) {
         g_morphMount = 0;
+        SaveMountMorph(); // Clear persistence
         if (!g_suspended) {
             *(uint32_t*)(desc + UNIT_FIELD_MOUNTDISPLAYID) = g_origMount;
             update = true;
@@ -527,10 +578,12 @@ bool DoMorph(const char* cmd, WowObject* player) {
         if (g_morphEnchantMH == 0 && g_origEnchantMH == 0) {
             g_origEnchantMH = ReadVisibleEnchant(player, 16);
         }
+        bool morphChanged = (g_morphEnchantMH != enchantId);
         g_morphEnchantMH = enchantId;
         if (!g_suspended) {
-            if (WriteVisibleEnchant(player, 16, enchantId)) update = true;
-            g_weaponRefreshTicks = 5;
+            bool wrote = WriteVisibleEnchant(player, 16, enchantId);
+            if (wrote) update = true;
+            if (morphChanged || wrote) g_weaponRefreshTicks = 1;
         }
     }
     else if (strncmp(cmd, "ENCHANT_OH:", 11) == 0) {
@@ -539,55 +592,49 @@ bool DoMorph(const char* cmd, WowObject* player) {
         if (g_morphEnchantOH == 0 && g_origEnchantOH == 0) {
             g_origEnchantOH = ReadVisibleEnchant(player, 17);
         }
+        bool morphChanged = (g_morphEnchantOH != enchantId);
         g_morphEnchantOH = enchantId;
         if (!g_suspended) {
-            if (WriteVisibleEnchant(player, 17, enchantId)) update = true;
-            g_weaponRefreshTicks = 5;
+            bool wrote = WriteVisibleEnchant(player, 17, enchantId);
+            if (wrote) update = true;
+            if (morphChanged || wrote) g_weaponRefreshTicks = 1;
         }
     }
     else if (strncmp(cmd, "ENCHANT_RESET_MH", 16) == 0) {
-        // Read current real enchant before resetting (in case weapon was swapped)
-        uint32_t currentRealEnchant = ReadVisibleEnchant(player, 16);
-        
+        bool hadMorph = (g_morphEnchantMH > 0);
+        bool restored = false;
         if (g_morphEnchantMH > 0) {
             // If we have a saved original, restore it
             if (g_origEnchantMH > 0) {
-                WriteVisibleEnchant(player, 16, g_origEnchantMH);
+                restored = WriteVisibleEnchant(player, 16, g_origEnchantMH) || restored;
             } else {
-                // No saved original, use current real enchant (or 0?)
-                // Actually, if we didn't save one, it might mean there wasn't one.
-                // But ReadVisibleEnchant above gets the CURRENT one, which is the morph!
-                // So restoring currentRealEnchant is wrong if it's the morph.
-                
-                // If g_origEnchantMH is 0, we assume 0.
-                WriteVisibleEnchant(player, 16, 0);
+                restored = WriteVisibleEnchant(player, 16, 0) || restored;
             }
         }
         g_morphEnchantMH = 0;
         g_origEnchantMH = 0;
         
         if (!g_suspended) {
-            g_weaponRefreshTicks = 5;
-            update = true;
+            if (restored) update = true;
+            if (hadMorph || restored) g_weaponRefreshTicks = 1;
         }
     }
     else if (strncmp(cmd, "ENCHANT_RESET_OH", 16) == 0) {
-        // Read current real enchant before resetting
-        uint32_t currentRealEnchant = ReadVisibleEnchant(player, 17);
-        
+        bool hadMorph = (g_morphEnchantOH > 0);
+        bool restored = false;
         if (g_morphEnchantOH > 0) {
             if (g_origEnchantOH > 0) {
-                WriteVisibleEnchant(player, 17, g_origEnchantOH);
+                restored = WriteVisibleEnchant(player, 17, g_origEnchantOH) || restored;
             } else {
-                WriteVisibleEnchant(player, 17, 0);
+                restored = WriteVisibleEnchant(player, 17, 0) || restored;
             }
         }
         g_morphEnchantOH = 0;
         g_origEnchantOH = 0;
         
         if (!g_suspended) {
-            g_weaponRefreshTicks = 5;
-            update = true;
+            if (restored) update = true;
+            if (hadMorph || restored) g_weaponRefreshTicks = 1;
         }
     }
     else if (strncmp(cmd, "TITLE:", 6) == 0) {
@@ -598,22 +645,26 @@ bool DoMorph(const char* cmd, WowObject* player) {
             
             char luaCmd[128];
             sprintf_s(luaCmd, "if SetCurrentTitle then SetCurrentTitle(%u) end", titleId);
-            FrameScript_Execute(luaCmd, "Transmorpher", 0);
-            FrameScript_Execute("if PaperDollTitlesPane_Update then PaperDollTitlesPane_Update() end", "Transmorpher", 0);
+            if (FrameScript_Execute) {
+                FrameScript_Execute(luaCmd, "Transmorpher", 0);
+                FrameScript_Execute("if PaperDollTitlesPane_Update then PaperDollTitlesPane_Update() end", "Transmorpher", 0);
+            }
             update = true;
         }
     }
     else if (strncmp(cmd, "TITLE_RESET", 11) == 0) {
         *(uint32_t*)(desc + PLAYER_FIELD_CHOSEN_TITLE) = g_origTitle;
-        
+
         char luaCmd[128];
         if (g_origTitle > 0) {
             sprintf_s(luaCmd, "if SetCurrentTitle then SetCurrentTitle(%u) end", g_origTitle);
         } else {
             sprintf_s(luaCmd, "if SetCurrentTitle then SetCurrentTitle(-1) end");
         }
-        FrameScript_Execute(luaCmd, "Transmorpher", 0);
-        FrameScript_Execute("if PaperDollTitlesPane_Update then PaperDollTitlesPane_Update() end", "Transmorpher", 0);
+        if (FrameScript_Execute) {
+            FrameScript_Execute(luaCmd, "Transmorpher", 0);
+            FrameScript_Execute("if PaperDollTitlesPane_Update then PaperDollTitlesPane_Update() end", "Transmorpher", 0);
+        }
         
         g_morphTitle = 0;
         update = true;
@@ -671,6 +722,60 @@ bool DoMorph(const char* cmd, WowObject* player) {
     }
     else if (strncmp(cmd, "SET:SHAPE:", 10) == 0) {
         g_keepShapeshift = (uint32_t)atoi(cmd + 10);
+    }
+    // Multiplayer Sync Bulk Commands
+    else if (strncmp(cmd, "PEER_SET:", 9) == 0) {
+        uint64_t guid = 0;
+        char guidStr[64] = {0};
+        uint32_t disp = 0; int sc100 = 0;
+        uint32_t mnt = 0, pet = 0, hpet = 0; int hpsc100 = 0;
+        uint32_t emh = 0, eoh = 0;
+        char itemsStr[512] = {0};
+
+        // Format: PEER_SET:GUID,display,scale100,mount,pet,hpet,hpsc100,emh,eoh,items
+        if (sscanf_s(cmd + 9, "%[^,],%u,%d,%u,%u,%u,%d,%u,%u,%s", 
+            guidStr, (unsigned)sizeof(guidStr), &disp, &sc100, &mnt, &pet, &hpet, &hpsc100, &emh, &eoh, itemsStr, (unsigned)sizeof(itemsStr)) >= 10) {
+            
+            guid = strtoull(guidStr, nullptr, 16);
+            if (guid != 0) {
+                RemoteMorph& rm = g_remoteMorphs[guid];
+                rm.lastSeen = GetTickCount64();
+                rm.displayId = disp;
+                rm.scale = (float)sc100 / 100.0f;
+                rm.mountId = (mnt == 4294967295) ? 0 : mnt;
+                rm.petId = pet;
+                rm.hPetId = hpet;
+                rm.hPetScale = (float)hpsc100 / 100.0f;
+                rm.enchantMH = emh;
+                rm.enchantOH = eoh;
+                
+                // Parse items: slot=id-slot=id-...
+                char* next_item = nullptr;
+                char* item_tok = strtok_s(itemsStr, "-", &next_item);
+                while (item_tok) {
+                    int slot = 0; uint32_t id = 0;
+                    if (sscanf_s(item_tok, "%d=%u", &slot, &id) == 2) {
+                        if (slot >= 1 && slot <= 19) {
+                            rm.items[slot] = (id == 0) ? HIDDEN_SENTINEL : id;
+                            rm.unmorphRelease[slot] = false;
+                        }
+                    }
+                    item_tok = strtok_s(nullptr, "-", &next_item);
+                }
+                Log("Remote GUID %llX: Peer state updated via PEER_SET (disp=%u)", guid, disp);
+            }
+        }
+    }
+    else if (strncmp(cmd, "PEER_CLEAR:", 11) == 0) {
+        uint64_t guid = strtoull(cmd + 11, nullptr, 16);
+        if (guid != 0) {
+            g_remoteMorphs.erase(guid);
+            Log("Remote GUID %llX: Peer cleared", guid);
+        }
+    }
+    else if (strncmp(cmd, "PEER_CLEAR_ALL", 14) == 0) {
+        g_remoteMorphs.clear();
+        Log("All peers cleared");
     }
 
     UpdateHasMorph();
@@ -855,12 +960,15 @@ skip_character_morph:
     }
 
     // --- Mount morph guard ---
-    if (g_morphMount > 0 && g_morphMount <= 0x00FFFFFF) {
+    if (g_morphMount > 0) {
         __try {
             uint32_t curMount = *(uint32_t*)(desc + UNIT_FIELD_MOUNTDISPLAYID);
-            // Only enforce if we are actually mounted (display id > 0)
-            if (curMount > 0 && curMount != g_morphMount) {
-                 *(uint32_t*)(desc + UNIT_FIELD_MOUNTDISPLAYID) = g_morphMount;
+            uint32_t target = (g_morphMount == HIDDEN_SENTINEL) ? 0 : g_morphMount;
+            
+            // Only enforce if we are actually mounted (curMount > 0) 
+            // OR if it's currently a morph we want to clear.
+            if (curMount > 0 && curMount != target) {
+                 *(uint32_t*)(desc + UNIT_FIELD_MOUNTDISPLAYID) = target;
                  extraUpdateNeeded = true;
             }
         } __except(1) {}
@@ -878,8 +986,6 @@ skip_character_morph:
     // Weapon Refresh Ticks
     if (g_weaponRefreshTicks > 0) {
         g_weaponRefreshTicks--;
-        ApplyMorphState(player);
-        if (CGUnit_UpdateDisplayInfo) __try { CGUnit_UpdateDisplayInfo(player, 1); } __except(1) {}
         ReStampWeapons(player);
     }
 }
@@ -895,7 +1001,8 @@ void GetNearbyPlayers(uint64_t playerGuid, char* outBuffer, size_t maxLen) {
         if (!objMgr) return;
         
         uint32_t objPtr = *(uint32_t*)(objMgr + 0xAC);
-        while (objPtr != 0 && (objPtr % 2 == 0)) {
+        int iterCount = 0;
+        while (objPtr != 0 && (objPtr % 2 == 0) && ++iterCount <= 5000) {
             WowObject* current = (WowObject*)objPtr;
             
             if (current->descriptors) {
@@ -1149,3 +1256,6 @@ void RemoteMorphGuard() {
         lastCleanup = now;
     }
 }
+
+// ===================================
+// End of file
