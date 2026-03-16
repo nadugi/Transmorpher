@@ -481,6 +481,20 @@ bool DoMorph(const char* cmd, WowObject* player) {
                 } else {
                     Log("Morphed displayId=%u", id);
                 }
+
+                // MOUNT FIX: If currently mounted, re-apply the mount morph immediately 
+                // after the base morph update to ensure it survives the model refresh.
+                if (g_morphMount > 0) {
+                    uint32_t curMount = *(uint32_t*)(desc + UNIT_FIELD_MOUNTDISPLAYID);
+                    if (curMount > 0) {
+                        uint32_t targetMount = (g_morphMount == HIDDEN_SENTINEL) ? 0 : g_morphMount;
+                        *(uint32_t*)(desc + UNIT_FIELD_MOUNTDISPLAYID) = targetMount;
+                        if (CGUnit_UpdateDisplayInfo) {
+                            __try { CGUnit_UpdateDisplayInfo(player, 1); } __except(1) {}
+                        }
+                        Log("Re-applied mount morph %u after base morph", targetMount);
+                    }
+                }
             } else {
                 Log("Morph suspended - state updated (displayId=%u) but not applied", id);
             }

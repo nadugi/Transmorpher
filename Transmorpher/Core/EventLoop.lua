@@ -23,13 +23,15 @@ mainFrame:RegisterEvent("UNIT_EXITED_VEHICLE")
 mainFrame:RegisterEvent("PLAYER_LOGOUT")
 mainFrame:RegisterEvent("BARBER_SHOP_OPEN")
 mainFrame:RegisterEvent("BARBER_SHOP_CLOSE")
+mainFrame:RegisterEvent("UNIT_SPELLCAST_START")
+mainFrame:RegisterEvent("UNIT_SPELLCAST_SENT")
+mainFrame:RegisterEvent("SPELLS_CHANGED")
 
--- State tracking
-local lastKnownForm = -1
 -- State tracking
 local lastKnownForm = -1
 local lastMainHand, lastOffHand = nil, nil
 local lastDBWActive = false
+local lastKnownMounted = false
 
 -- ============================================================
 -- Smart Interaction Intervention — pre-emptive vehicle detection
@@ -80,6 +82,75 @@ end)
 local function ScheduleMorphSend(delay)
     delayedSendTimer.remaining = delay or 0.05; delayedSendTimer:Show()
 end
+
+-- ============================================================
+-- MOUNT LOGIC (Simplified & Consolidated)
+-- ============================================================
+
+function ns.GetActiveMountSpellID()
+    if not IsMounted() then return nil end
+    for i = 1, 40 do
+        local _, _, _, _, _, _, _, _, _, _, spellID = UnitAura("player", i, "HELPFUL")
+        if not spellID then break end
+        if ns.mountSpellLookup and ns.mountSpellLookup[spellID] then
+            return spellID
+        end
+    end
+    return nil
+end
+
+function ns.GetTargetMountDisplayID(forcedSpellID)
+    if not TransmorpherCharacterState then return nil end
+    local state = TransmorpherCharacterState
+    if state.MountHidden then return -1 end
+    local activeSpellID = forcedSpellID or ns.GetActiveMountSpellID()
+    if activeSpellID and state.Mounts and state.Mounts[activeSpellID] then
+        return state.Mounts[activeSpellID]
+    end
+    return state.MountDisplay
+end
+
+local mountBurstShots = 0
+local mountBurstID = 0
+local mountBurstFrame = CreateFrame("Frame")
+mountBurstFrame:Hide()
+mountBurstFrame.elapsed = 0
+mountBurstFrame:SetScript("OnUpdate", function(self, dt)
+    self.elapsed = self.elapsed + dt
+    if self.elapsed < 0.05 then return end
+    self.elapsed = 0
+    if ns.vehicleSuspended then self:Hide(); return end
+    if mountBurstShots > 0 then
+        ns.SendRawMorphCommand("MOUNT_MORPH:" .. mountBurstID)
+        mountBurstShots = mountBurstShots - 1
+    else self:Hide() end
+end)
+
+function ns.ApplyMountMorph(isMounting, forcedSpellID)
+    if not ns.IsMorpherReady() or ns.vehicleSuspended then return end
+    local targetID = ns.GetTargetMountDisplayID(forcedSpellID) or 0
+    if targetID == 0 then
+        ns.SendRawMorphCommand("MOUNT_RESET")
+        return
+    end
+    mountBurstID = targetID
+    if isMounting then
+        ns.SendRawMorphCommand("SET:MOUNTED:1")
+        mountBurstShots = 8
+        mountBurstFrame:Show()
+    else
+        -- When re-applying (already mounted), use a shorter burst to ensure it survives model changes
+        mountBurstShots = 4
+        mountBurstFrame:Show()
+    end
+end
+
+-- Ensure MountManager namespace exists for compatibility
+ns.MountManager = {
+    GetActiveMountSpellID = ns.GetActiveMountSpellID,
+    ApplyCorrectMorph = ns.ApplyMountMorph,
+    GetTargetDisplayID = ns.GetTargetMountDisplayID
+}
 
 -- ============================================================
 -- FORM & BUFF CHECK
@@ -147,6 +218,11 @@ formBurstFrame:SetScript("OnUpdate", function(self, dt)
         ns.SendRawMorphCommand("RESUME|MORPH:" .. self.displayID)
     else
         ns.SendRawMorphCommand("MORPH:" .. self.displayID)
+    end
+
+    -- Re-apply mount morph if currently mounted to prevent it from resetting
+    if IsMounted() then
+        ns.ApplyMountMorph(false)
     end
     self.shotsLeft = self.shotsLeft - 1
     lastFormMorphApplyAt = GetTime()
@@ -224,6 +300,11 @@ local function ApplyTemporaryFormMorph(displayID)
     else
         ns.SendRawMorphCommand("MORPH:" .. displayID)
     end
+
+    -- Re-apply mount morph if currently mounted to prevent it from resetting
+    if IsMounted() then
+        ns.ApplyMountMorph(false)
+    end
     lastFormMorphApplyAt = GetTime()
 end
 
@@ -256,6 +337,11 @@ local function RestoreBaseMorphAfterForm()
         end
         if TransmorpherCharacterState and TransmorpherCharacterState.EnchantOH then
             ns.SendRawMorphCommand("ENCHANT_OH:" .. TransmorpherCharacterState.EnchantOH)
+        end
+
+        -- Re-apply mount morph if currently mounted
+        if IsMounted() then
+            ns.ApplyMountMorph(false)
         end
     end
 end
@@ -397,6 +483,10 @@ mainFrame:SetScript("OnEvent", function(self, event, ...)
             end
         end
 
+        if IsMounted() then
+             ns.SendRawMorphCommand("SET:MOUNTED:1")
+             ns.ApplyMountMorph(true)
+        end
         ScheduleMorphSend(0.4)
         ns.RestoreMorphedUI()
 
@@ -432,16 +522,9 @@ mainFrame:SetScript("OnEvent", function(self, event, ...)
             end
         end
 
-        -- Auto-switch ground/flying mount morph based on zone
-        local flyableNow = ns.IsFlyableZone and ns.IsFlyableZone() or false
-        if flyableNow ~= lastFlyableState then
-            lastFlyableState = flyableNow
-            if TransmorpherCharacterState and ns.GetAutoMountDisplay then
-                local autoMount = ns.GetAutoMountDisplay()
-                if autoMount and autoMount > 0 and ns.IsMorpherReady() then
-                    ns.SendRawMorphCommand("MOUNT_MORPH:" .. autoMount)
-                end
-            end
+        if IsMounted() then
+             ns.SendRawMorphCommand("SET:MOUNTED:1")
+             ns.ApplyMountMorph(true)
         end
 
         if TransmorpherCharacterState and TransmorpherCharacterState.WorldTime then
@@ -504,6 +587,9 @@ mainFrame:SetScript("OnEvent", function(self, event, ...)
             ns.CheckFormMorphs()
             ScheduleFormRecheck(0.6, 0.05)
         end
+        if IsMounted() then
+            ns.ApplyMountMorph(false)
+        end
 
     elseif event == "UNIT_MODEL_CHANGED" then
         local unit = ...
@@ -511,13 +597,25 @@ mainFrame:SetScript("OnEvent", function(self, event, ...)
         local curMounted = IsMounted() or false
         if curMounted ~= lastKnownMounted then
             lastKnownMounted = curMounted
-            -- Player just mounted: apply ground/flying auto-switch based on mount type
-            if curMounted and TransmorpherCharacterState and ns.GetAutoMountDisplay then
-                local settings = ns.GetSettings()
-                if settings.saveMountMorph then
-                    -- Small delay to let mount aura register for spell detection
-                    mountAutoSwitchFrame.elapsed = 0
-                    mountAutoSwitchFrame:Show()
+            if curMounted then
+                ns.SendRawMorphCommand("SET:MOUNTED:1")
+                ns.ApplyMountMorph(true)
+            else
+                ns.SendRawMorphCommand("MOUNT_RESET|SET:MOUNTED:0")
+            end
+        end
+
+    elseif event == "UNIT_SPELLCAST_START" or event == "UNIT_SPELLCAST_SENT" then
+        local unit = ...
+        if unit == "player" then
+            local _, _, _, _, _, _, _, _, spellID = UnitCastingInfo("player")
+            if not spellID and event == "UNIT_SPELLCAST_SENT" then
+                 _, _, _, spellID = ...
+            end
+            if spellID and ns.mountSpellLookup and ns.mountSpellLookup[spellID] then
+                if not ns.vehicleSuspended then
+                    ns.SendRawMorphCommand("SET:MOUNTED:1")
+                    ns.ApplyMountMorph(true, spellID)
                 end
             end
         end
@@ -598,14 +696,22 @@ mainFrame:SetScript("OnEvent", function(self, event, ...)
 end)
 
 -- ============================================================
--- AUTO-UNSHIFT ON MOUNT ERROR
+-- AUTO-DISMOUNT / AUTO-UNSHIFT ON ERROR
 -- ============================================================
 do
     local f = CreateFrame("Frame")
     f:RegisterEvent("UI_ERROR_MESSAGE")
     f:SetScript("OnEvent", function(_, _, msg)
+        -- Auto-Unshift
         if msg == ERR_MOUNT_SHAPESHIFTED or msg == ERR_NOT_WHILE_SHAPESHIFTED then
-            if GetShapeshiftForm() > 0 and not InCombatLockdown() then CancelShapeshiftForm() end
+            if GetShapeshiftForm() > 0 and not InCombatLockdown() then
+                CancelShapeshiftForm()
+            end
+        -- Auto-Dismount
+        elseif msg == ERR_ATTACK_MOUNTED or msg == ERR_NOT_WHILE_MOUNTED or msg == ERR_TAXIPLAYERALREADYMOUNTED then
+            if IsMounted() and not InCombatLockdown() then
+                Dismount()
+            end
         end
     end)
 end

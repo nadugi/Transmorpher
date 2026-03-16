@@ -103,7 +103,7 @@ local function TrackMorphCommand(cmd)
             TransmorpherCharacterState.FlyingMountName = nil
             TransmorpherCharacterState.MountHidden = false
             
-            local activeMountSpellID = ns.MountManager and ns.MountManager.GetActiveMountSpellID and ns.MountManager.GetActiveMountSpellID()
+            local activeMountSpellID = ns.GetActiveMountSpellID and ns.GetActiveMountSpellID()
             if activeMountSpellID then
                 TransmorpherCharacterState.Mounts[activeMountSpellID] = nil
             end
@@ -260,6 +260,13 @@ function ns.SendMorphCommand(cmd)
         morphBatchStatusDirty = true
     else
         if ns.UpdateMorphStatusBar then ns.UpdateMorphStatusBar() end
+    end
+
+    -- Fix for mount reset: if a morph is applied, re-apply the mount morph as well.
+    -- This ensures the DLL has the correct mount display ID ready for when the player mounts,
+    -- or preserves it if they are already mounted during a model refresh.
+    if ns.ApplyMountMorph then
+        ns.ApplyMountMorph(IsMounted()) 
     end
 
     -- Sync with other players
@@ -424,7 +431,7 @@ function ns.SendFullMorphState()
         table.insert(cmdQueue, "MORPH:" .. activeMorph)
     end
 
-    -- Handle Mount Morph (Per-mount > Ground/Flying auto-switch > Global)
+    -- Handle Mount Morph (Per-mount > Global)
     if settings.saveMountMorph then
         local mountMorph = nil
         local activeMountSpellID = ns.GetActiveMountSpellID and ns.GetActiveMountSpellID()
@@ -432,10 +439,6 @@ function ns.SendFullMorphState()
             mountMorph = TransmorpherCharacterState.Mounts[activeMountSpellID]
         end
 
-        -- Fallback to ground/flying auto-switch
-        if not mountMorph and ns.GetAutoMountDisplay then
-            mountMorph = ns.GetAutoMountDisplay()
-        end
 
         -- Fallback to global if nothing else
         mountMorph = mountMorph or TransmorpherCharacterState.MountDisplay
@@ -456,6 +459,10 @@ function ns.SendFullMorphState()
             mountMorph = -1
         end
         
+        if IsMounted() then
+            table.insert(cmdQueue, "SET:MOUNTED:1")
+        end
+
         if mountMorph then
             table.insert(cmdQueue, "MOUNT_MORPH:" .. mountMorph)
         end

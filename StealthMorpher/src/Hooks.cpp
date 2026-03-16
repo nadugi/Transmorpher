@@ -140,9 +140,6 @@ void __declspec(naked) MountDisplayHook()
         cmp edx, 0x45 
         jne check_display_id
 
-        cmp dword ptr [g_luaMounted], 1
-        jne do_original
-
         cmp ecx, 0 // Dismount
         je do_original
 
