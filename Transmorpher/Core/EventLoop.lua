@@ -29,6 +29,8 @@ mainFrame:RegisterEvent("BARBER_SHOP_CLOSE")
 mainFrame:RegisterEvent("UNIT_SPELLCAST_START")
 mainFrame:RegisterEvent("UNIT_SPELLCAST_SENT")
 mainFrame:RegisterEvent("SPELLS_CHANGED")
+mainFrame:RegisterEvent("UNIT_PET")
+mainFrame:RegisterEvent("PET_BAR_UPDATE")
 
 -- State tracking
 local lastKnownForm = -1
@@ -86,6 +88,25 @@ local function ScheduleMorphSend(delay)
     -- Debounce: always reset the timer to prevent duplicate sends
     delayedSendTimer.remaining = delay or 0.05
     delayedSendTimer:Show()
+end
+
+-- ============================================================
+-- PET MORPH RE-APPLICATION
+-- ============================================================
+local petApplyTimer = CreateFrame("Frame")
+petApplyTimer:Hide()
+petApplyTimer.remaining = 0
+petApplyTimer:SetScript("OnUpdate", function(self, elapsed)
+    self.remaining = self.remaining - elapsed
+    if self.remaining <= 0 then
+        self:Hide()
+        if ns.ApplyPetMorphs then ns.ApplyPetMorphs() end
+    end
+end)
+
+local function SchedulePetMorphApply(delay)
+    petApplyTimer.remaining = delay or 0.1
+    petApplyTimer:Show()
 end
 
 -- ============================================================
@@ -434,16 +455,19 @@ mainFrame:SetScript("OnEvent", function(self, event, ...)
 
     elseif event == "UNIT_MODEL_CHANGED" then
         local unit = ...
-        if unit ~= "player" then return end
-        local curMounted = IsMounted() or false
-        if curMounted ~= lastKnownMounted then
-            lastKnownMounted = curMounted
-            if curMounted then
-                ns.SendRawMorphCommand("SET:MOUNTED:1")
-                ns.MountManager.ApplyCorrectMorph(true)
-            else
-                ns.SendRawMorphCommand("SET:MOUNTED:0")
+        if unit == "player" then
+            local curMounted = IsMounted() or false
+            if curMounted ~= lastKnownMounted then
+                lastKnownMounted = curMounted
+                if curMounted then
+                    ns.SendRawMorphCommand("SET:MOUNTED:1")
+                    ns.MountManager.ApplyCorrectMorph(true)
+                else
+                    ns.SendRawMorphCommand("SET:MOUNTED:0")
+                end
             end
+        elseif unit == "pet" then
+            SchedulePetMorphApply(0.12) -- Re-apply pet morph if model changed
         end
 
     elseif event == "UNIT_SPELLCAST_START" or event == "UNIT_SPELLCAST_SENT" then
@@ -541,7 +565,10 @@ mainFrame:SetScript("OnEvent", function(self, event, ...)
             ns.isDead = false
             ns.SendRawMorphCommand("RESUME")
             ScheduleMorphSend(0.2) -- Restore appearance after revival
+            SchedulePetMorphApply(0.3) -- Restore pet appearance after revival
         end
+    elseif event == "UNIT_PET" or event == "PET_BAR_UPDATE" then
+        SchedulePetMorphApply(0.15)
     end
 end)
 

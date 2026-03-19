@@ -332,6 +332,29 @@ function ns.InitializeDLLSettings()
     end
 end
 
+-- Helper: Re-apply pet morphs from saved state
+function ns.ApplyPetMorphs()
+    local settings = ns.GetSettings()
+    if not settings.saveMorphState or not TransmorpherCharacterState then return end
+
+    local cmdQueue = {}
+    -- Combat Pet
+    if TransmorpherCharacterState.HunterPetDisplay and (settings.saveCombatPetMorph or settings.saveHunterPetMorph) then
+        table.insert(cmdQueue, "HPET_MORPH:" .. TransmorpherCharacterState.HunterPetDisplay)
+    end
+    if TransmorpherCharacterState.HunterPetScale and (settings.saveCombatPetMorph or settings.saveHunterPetMorph) then
+        table.insert(cmdQueue, "HPET_SCALE:" .. TransmorpherCharacterState.HunterPetScale)
+    end
+    -- Non-combat Pet
+    if TransmorpherCharacterState.PetDisplay and settings.savePetMorph then
+        table.insert(cmdQueue, "PET_MORPH:" .. TransmorpherCharacterState.PetDisplay)
+    end
+
+    if #cmdQueue > 0 then
+        ns.SendRawMorphCommand(table.concat(cmdQueue, "|"))
+    end
+end
+
 -- ============================================================
 -- FULL STATE RESTORE
 -- Sends all saved morph state to the DLL (used on login/zone change).
