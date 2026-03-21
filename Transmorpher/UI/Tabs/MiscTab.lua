@@ -35,20 +35,156 @@ local function CreateMiscSubTabBtn(id, text)
     return btn
 end
 
-local btnEnv = CreateMiscSubTabBtn(1, "Environment"); btnEnv:SetPoint("LEFT", 0, 0)
-local btnTitles = CreateMiscSubTabBtn(2, "Titles"); btnTitles:SetPoint("LEFT", btnEnv, "RIGHT", 0, 0)
+local btnEnv = CreateMiscSubTabBtn(1, "Environment"); btnEnv:SetPoint("LEFT", 0, 0); btnEnv:SetWidth(85)
+local btnTitles = CreateMiscSubTabBtn(2, "Titles"); btnTitles:SetPoint("LEFT", btnEnv, "RIGHT", 0, 0); btnTitles:SetWidth(85)
+local btnOpt = CreateMiscSubTabBtn(3, "Optimization"); btnOpt:SetPoint("LEFT", btnTitles, "RIGHT", 0, 0); btnOpt:SetWidth(100)
 
 local function ShowMiscSubTab(id)
     envPanel[id == 1 and "Show" or "Hide"](envPanel)
     titlesPanel[id == 2 and "Show" or "Hide"](titlesPanel)
-    btnEnv:SetActive(id == 1); btnTitles:SetActive(id == 2)
+    if optimizationPanel then optimizationPanel[id == 3 and "Show" or "Hide"](optimizationPanel) end
+    btnEnv:SetActive(id == 1); btnTitles:SetActive(id == 2); btnOpt:SetActive(id == 3)
     PlaySound("gsTitleOptionOK")
 end
 
 btnEnv:SetScript("OnClick", function() ShowMiscSubTab(1) end)
 btnTitles:SetScript("OnClick", function() ShowMiscSubTab(2) end)
+btnOpt:SetScript("OnClick", function() ShowMiscSubTab(3) end)
 ShowMiscSubTab(1)
 
+-- ============================================================
+-- OPTIMIZATION PANEL
+-- ============================================================
+local optPanel = CreateFrame("Frame", "$parentOptPanel", miscTab)
+optPanel:SetPoint("TOPLEFT", 0, -50); optPanel:SetPoint("BOTTOMRIGHT"); optPanel:Hide()
+optimizationPanel = optPanel
+
+local optCard = CreateFrame("Frame", nil, optPanel)
+optCard:SetPoint("TOPLEFT", 8, -8); optCard:SetPoint("TOPRIGHT", -8, -8); optCard:SetHeight(400)
+optCard:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8x8", edgeFile="Interface\\Buttons\\WHITE8x8", tile=true, tileSize=8, edgeSize=1, insets={left=1,right=1,top=1,bottom=1}})
+optCard:SetBackdropColor(0.05, 0.055, 0.07, 0.93); optCard:SetBackdropBorderColor(0.56, 0.47, 0.20, 0.78)
+
+local optTitle = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+optTitle:SetPoint("TOPLEFT", 12, -12); optTitle:SetText("|cffF5C842Spell Visibility & Optimization|r")
+
+local optDesc = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+optDesc:SetPoint("TOPLEFT", optTitle, "BOTTOMLEFT", 0, -4); optDesc:SetText("Toggle specific spell effects globally to maximize performance."); optDesc:SetTextColor(0.7, 0.7, 0.7)
+
+local optimizationCheckboxes = {}
+
+local function CreateOptCheckbox(name, label, tooltip, settingKey, cmdPrefix)
+    local cb = CreateFrame("CheckButton", "$parent"..name, optCard, "ChatConfigCheckButtonTemplate")
+    cb:SetSize(22, 22)
+    local text = _G[cb:GetName().."Text"]
+    text:SetText(label); text:SetFontObject("GameFontNormalSmall"); text:SetPoint("LEFT", cb, "RIGHT", 4, 1)
+    
+    cb:SetScript("OnShow", function(self)
+        self:SetChecked(ns.GetSettings()[settingKey])
+    end)
+    
+    cb:SetScript("OnClick", function(self)
+        local settings = ns.GetSettings()
+        local checked = self:GetChecked()
+        settings[settingKey] = checked
+        if ns.IsMorpherReady() then
+            ns.SendMorphCommand("SET:"..cmdPrefix..":"..(checked and "1" or "0"))
+        end
+        PlaySound(checked and "igMainMenuOptionCheckBoxOn" or "igMainMenuOptionCheckBoxOff")
+    end)
+    
+    cb:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(label, 1, 0.82, 0)
+        GameTooltip:AddLine(tooltip, 0.8, 0.8, 0.8, true)
+        GameTooltip:AddLine("\n|cffF5C842Note:|r Affects all units globally.", 0.6, 0.6, 0.6, true)
+        GameTooltip:Show()
+    end)
+    cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    
+    optimizationCheckboxes[settingKey] = cb
+    return cb
+end
+
+local function SetAllOptimization(state)
+    local settings = ns.GetSettings()
+    local keys = {
+        "hideAllSpells", "hidePrecast", "hideCast", "hideChannel",
+        "hideImpactTarget", "hideImpactArea", "hideGround", 
+        "hideMissile", "hideAura", "hideAudio"
+    }
+    local batch = {}
+    for _, key in ipairs(keys) do
+        settings[key] = state
+        local cmd = "HIDE_" .. (key:gsub("hide", ""):upper())
+        if key == "hideImpactTarget" then cmd = "HIDE_IMPACT_TARGET"
+        elseif key == "hideImpactArea" then cmd = "HIDE_IMPACT_AREA"
+        end
+        table.insert(batch, "SET:" .. cmd .. ":" .. (state and "1" or "0"))
+    end
+    if ns.IsMorpherReady() then
+        ns.SendMorphCommand(table.concat(batch, "|"))
+    end
+    -- Refresh UI checkboxes
+    for key, cb in pairs(optimizationCheckboxes) do
+        cb:SetChecked(state)
+    end
+end
+
+local btnEnableAll = ns.CreateGoldenButton("$parentEnableAll", optCard)
+btnEnableAll:SetPoint("TOPRIGHT", -12, -12); btnEnableAll:SetSize(90, 22); btnEnableAll:SetText("Disable All Spells")
+btnEnableAll:SetScript("OnClick", function() SetAllOptimization(true); PlaySound("igMainMenuOptionCheckBoxOn") end)
+
+local btnDisableAll = ns.CreateGoldenButton("$parentDisableAll", optCard)
+btnDisableAll:SetPoint("RIGHT", btnEnableAll, "LEFT", -8, 0); btnDisableAll:SetSize(90, 22); btnDisableAll:SetText("Show All")
+btnDisableAll:SetScript("OnClick", function() SetAllOptimization(false); PlaySound("igMainMenuOptionCheckBoxOff") end)
+
+local cbHideAll = CreateOptCheckbox("HideAll", "|cffFF4444[MASTER] Hide ALL Spells|r", "Completely disables all spell visuals globally for peak FPS.", "hideAllSpells", "HIDE_ALL")
+cbHideAll:SetPoint("TOPLEFT", 16, -60)
+
+local sep1 = optCard:CreateTexture(nil, "ARTWORK")
+sep1:SetSize(350, 1); sep1:SetPoint("TOPLEFT", 16, -88); sep1:SetTexture(1, 1, 1, 0.05)
+
+-- Group 1: Casting & Auras
+local sub1 = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+sub1:SetPoint("TOPLEFT", 16, -100); sub1:SetText("|cffA3A3A3Casting & Auras|r")
+
+local cbHidePre = CreateOptCheckbox("HidePre", "Pre-Cast Hand Glows", "Hides hand glows before a spell launches.", "hidePrecast", "HIDE_PRECAST")
+cbHidePre:SetPoint("TOPLEFT", 20, -120)
+
+local cbHideCast = CreateOptCheckbox("HideCast", "Casting Animations", "Hides main character casting visuals.", "hideCast", "HIDE_CAST")
+cbHideCast:SetPoint("TOPLEFT", 20, -145)
+
+local cbHideChan = CreateOptCheckbox("HideChan", "Channeled Beams", "Hides beams like Mind Flay or Drain Life.", "hideChannel", "HIDE_CHANNEL")
+cbHideChan:SetPoint("TOPLEFT", 20, -170)
+
+local cbHideAura = CreateOptCheckbox("HideAura", "Buff & Aura Visuals", "Hides character procs and aura visuals.", "hideAura", "HIDE_AURA")
+cbHideAura:SetPoint("TOPLEFT", 20, -195)
+
+local sep2 = optCard:CreateTexture(nil, "ARTWORK")
+sep2:SetSize(350, 1); sep2:SetPoint("TOPLEFT", 16, -225); sep2:SetTexture(1, 1, 1, 0.05)
+
+-- Group 2: Impacts & World
+local sub2 = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+sub2:SetPoint("TOPLEFT", 16, -235); sub2:SetText("|cffA3A3A3Impacts & World|r")
+
+local cbHideHitT = CreateOptCheckbox("HideHitT", "Impact (on Target)", "Hides hit flashes on characters.", "hideImpactTarget", "HIDE_IMPACT_TARGET")
+cbHideHitT:SetPoint("TOPLEFT", 20, -255)
+
+local cbHideHitA = CreateOptCheckbox("HideHitA", "Impact (Area Flashes)", "Hides secondary area flashes.", "hideImpactArea", "HIDE_IMPACT_AREA")
+cbHideHitA:SetPoint("TOPLEFT", 20, -280)
+
+local cbHideGround = CreateOptCheckbox("HideGround", "Persistent Ground Effects", "Hides ground effects like Consecration (Highly Recommended).", "hideGround", "HIDE_GROUND")
+cbHideGround:SetPoint("TOPLEFT", 20, -305)
+
+local cbHideMiss = CreateOptCheckbox("HideMiss", "Missiles & Projectiles", "Hides traveling bolts (Wrath, Fireball) and arrows.", "hideMissile", "HIDE_MISSILE")
+cbHideMiss:SetPoint("TOPLEFT", 20, -330)
+
+local cbHideAudio = CreateOptCheckbox("HideAudio", "|cffFFD100Suppress Spell Sounds|r", "Mutes spell-related missile and impact audio.", "hideAudio", "HIDE_AUDIO")
+cbHideAudio:SetPoint("TOPLEFT", 20, -355)
+
+-- ============================================================
+-- ENVIRONMENT PANEL (Existing)
+-- ============================================================
 local timeCard = CreateFrame("Frame", nil, envPanel)
 timeCard:SetPoint("TOPLEFT", 8, -8)
 timeCard:SetPoint("TOPRIGHT", -8, -8)

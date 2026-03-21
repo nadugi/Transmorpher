@@ -360,6 +360,8 @@ static DWORD WINAPI StealthThread(LPVOID lpParam) {
 
     // UpdateDisplayInfo hook is currently disabled in code, just attempt it
     // InstallUpdateDisplayInfoHook();
+    
+
     bool spellHookOk = InstallSpellVisualHook();
     if (!spellHookOk) {
         Log("WARNING: Failed to install spell visual hook!");
@@ -411,6 +413,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         Sleep(100); // Let any in-flight hook execution drain
         UninstallMountHook();
         UninstallUpdateDisplayInfoHook();
+
         UninstallSpellVisualHook();
         UninstallTimeHook();
 

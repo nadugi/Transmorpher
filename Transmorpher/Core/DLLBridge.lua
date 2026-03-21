@@ -170,6 +170,8 @@ local function TrackMorphCommand(cmd)
                 TransmorpherCharacterState.SpellMorphs = {}
             end
 
+
+
         elseif prefix == "RESET" and parts[2] then
             if parts[2] == "ALL" then
                 if TransmorpherCharacterState and TransmorpherCharacterState.Items then
@@ -218,6 +220,7 @@ local function TrackMorphCommand(cmd)
                 else
                     TransmorpherCharacterState.WeaponSets = {}
                 end
+
                 -- Preserve Forms
                 if not TransmorpherCharacterState.Forms then TransmorpherCharacterState.Forms = {} end
                 if not TransmorpherCharacterState.SpellMorphs then TransmorpherCharacterState.SpellMorphs = {} end
@@ -383,10 +386,22 @@ function ns.InitializeDLLSettings()
         end
     end
 
-    -- Send all settings to DLL immediately
-    ns.SendRawMorphCommand("SET:DBW:" .. (settings.showDBWProc and "1" or "0"))
+    -- Send all settings to DLL immediately (DBW is now always 0)
+    ns.SendRawMorphCommand("SET:DBW:0")
     ns.SendRawMorphCommand("SET:META:" .. (settings.showMetamorphosis and "1" or "0"))
     ns.SendRawMorphCommand("SET:SHAPE:" .. (settings.morphInShapeshift and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_ALL:" .. (settings.hideAllSpells and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_PRECAST:" .. (settings.hidePrecast and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_CAST:" .. (settings.hideCast and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_CHANNEL:" .. (settings.hideChannel and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_IMPACT_TARGET:" .. (settings.hideImpactTarget and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_IMPACT_AREA:" .. (settings.hideImpactArea and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_GROUND:" .. (settings.hideGround and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_MISSILE:" .. (settings.hideMissile and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_AURA:" .. (settings.hideAura and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_AUDIO:" .. (settings.hideAudio and "1" or "0"))
+    
+
     
     dllSettingsInitialized = true
     dllInitRetryFrame:Hide()
@@ -397,8 +412,7 @@ function ns.InitializeDLLSettings()
     end
 
     if type(Log) == "function" then
-        Log("DLL settings initialized: DBW=%s, META=%s, SHAPE=%s",
-            settings.showDBWProc and "1" or "0",
+        Log("DLL settings initialized: DBW=0, META=%s, SHAPE=%s",
             settings.showMetamorphosis and "1" or "0",
             settings.morphInShapeshift and "1" or "0")
     end
@@ -450,7 +464,7 @@ function ns.SendFullMorphState()
     local cmdQueue = {}
 
     -- Sync settings to DLL first
-    table.insert(cmdQueue, "SET:DBW:" .. (settings.showDBWProc and "1" or "0"))
+    table.insert(cmdQueue, "SET:DBW:0")
     table.insert(cmdQueue, "SET:META:" .. (settings.showMetamorphosis and "1" or "0"))
     table.insert(cmdQueue, "SET:SHAPE:" .. (settings.morphInShapeshift and "1" or "0"))
 
@@ -505,7 +519,7 @@ function ns.SendFullMorphState()
         ns.morphSuspended = false
         table.insert(cmdQueue, "RESUME")
     end
-    if not settings.showDBWProc and ns.HasDBWProc() then
+    if ns.HasDBWProc() then
         ns.dbwSuspended = false
         table.insert(cmdQueue, "RESUME")
     end
@@ -586,6 +600,20 @@ function ns.SendFullMorphState()
             end
         end
     end
+
+
+
+    -- Optimization Settings
+    table.insert(cmdQueue, "SET:HIDE_ALL:" .. (settings.hideAllSpells and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_PRECAST:" .. (settings.hidePrecast and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_CAST:" .. (settings.hideCast and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_CHANNEL:" .. (settings.hideChannel and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_IMPACT_TARGET:" .. (settings.hideImpactTarget and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_IMPACT_AREA:" .. (settings.hideImpactArea and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_GROUND:" .. (settings.hideGround and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_MISSILE:" .. (settings.hideMissile and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_AURA:" .. (settings.hideAura and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_AUDIO:" .. (settings.hideAudio and "1" or "0"))
 
     if #cmdQueue > 0 then
         ns.SendRawMorphCommand(table.concat(cmdQueue, "|"))

@@ -361,7 +361,7 @@ mainFrame:SetScript("OnEvent", function(self, event, ...)
         -- Fallback if no form morph active
         if not ns.currentFormMorph then
             ns.morphSuspended = ns.IsModelChangingForm()
-            ns.dbwSuspended = ns.GetSettings().showDBWProc and ns.HasDBWProc() or false
+            ns.dbwSuspended = false
             lastDBWActive = ns.dbwSuspended
             ns.vehicleSuspended = UnitInVehicle("player")
 
@@ -407,7 +407,7 @@ mainFrame:SetScript("OnEvent", function(self, event, ...)
 
         if not ns.currentFormMorph then
             ns.morphSuspended = ns.IsModelChangingForm()
-            ns.dbwSuspended = ns.GetSettings().showDBWProc and ns.HasDBWProc() or false
+            ns.dbwSuspended = false
             lastDBWActive = ns.dbwSuspended
             ns.vehicleSuspended = UnitInVehicle("player")
 
@@ -466,7 +466,7 @@ mainFrame:SetScript("OnEvent", function(self, event, ...)
         local unit = ...
         if unit == "player" then
             local settings = ns.GetSettings()
-            local dbwActiveNow = settings.showDBWProc and ns.HasDBWProc()
+            local dbwActiveNow = false
             if dbwActiveNow ~= lastDBWActive then
                 lastDBWActive = dbwActiveNow
                 if dbwActiveNow then

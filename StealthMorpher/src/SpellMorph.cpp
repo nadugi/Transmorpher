@@ -7,17 +7,24 @@
 #include <vector>
 #include <cstring>
 #include <string>
-#include <algorithm>
 #include <cmath>
 #include <memory>
 
-namespace {
-    // Option to hide all spell visuals from other players
-    static bool g_hideAllOtherSpells = false;
+static bool g_hideAllSpells = false;
+static bool g_hidePrecast = false;
+static bool g_hideCast = false;
+static bool g_hideChannel = false;
+static bool g_hideImpactTarget = false;
+static bool g_hideImpactArea = false;
+static bool g_hideGround = false;
+static bool g_hideMissile = false;
+static bool g_hideAura = false;
+static bool g_hideAudio = false;
 
-    // Expose to Lua/command bridge
-    void SetHideAllOtherSpells(bool hide) { g_hideAllOtherSpells = hide; }
-    bool GetHideAllOtherSpells() { return g_hideAllOtherSpells; }
+// Use thread_local to track which unit is currently requesting a visual
+static thread_local uint64_t g_currentCasterGUID = 0;
+
+namespace {
     struct SpellRec {
         int32_t m_ID;
         // ... many fields ...
@@ -83,7 +90,6 @@ namespace {
     static GetSpellVisualRowFn g_originalGetSpellVisualRow = nullptr;
     static std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> g_spellIdToVisualIdMap;
     static std::unordered_map<uint32_t, void*> g_spellRowPointers; // Memory addresses of Spell.dbc rows
-    static std::unordered_map<uint32_t, uint32_t> g_originalMissileIds; // Original Field 227 values
     static std::unordered_map<uint32_t, std::string> g_spellNames;
     static std::vector<uint8_t> g_spellStringTable;
     static bool g_dbcPreloaded = false;
@@ -92,8 +98,15 @@ namespace {
     static std::unordered_map<uint32_t, bool> g_validSpellMissiles;
     static std::unordered_map<uint32_t, bool> g_validSpellMissileMotions;
     static std::unordered_map<uint32_t, std::vector<uint8_t>> g_spellVisualRecs;
-    static std::unordered_map<uint64_t, std::unique_ptr<SpellVisualRec>> g_sanitizedVisuals;
-    static uint32_t g_morphGeneration = 0; // Incremented on change to ensure "soft reset" without invalidating pointers
+    
+    // In-Place Optimization Data
+    static std::vector<uint8_t> g_spellVisualBackup; // Original raw data of SpellVisual.dbc
+    static void* g_spellVisualBaseAddr = nullptr;
+    static uint32_t g_spellVisualRecordCount = 0;
+    static uint32_t g_spellVisualRecordSize = 0;
+
+    static uint32_t g_morphGeneration = 0;
+    static std::unordered_map<void*, uint32_t> g_sanitizedPtrGeneration; 
     static SpellVisualRec g_nullVisualRec = {};
 
     static void SoftResetCache() {
@@ -252,7 +265,6 @@ namespace {
             
             g_spellIdToVisualIdMap[id] = {v0, v1};
             g_spellRowPointers[id] = (void*)rec;
-            g_originalMissileIds[id] = mId;
 
             uint32_t namePtr = *reinterpret_cast<uint32_t*>(rec + NAME_OFFSET);
             if (namePtr < h.stringTableSize) {
@@ -316,53 +328,74 @@ namespace {
             rec->m_missileAttachment = original->m_missileAttachment;
             for (int i = 0; i < 3; ++i) rec->m_missileCastOffset[i] = original->m_missileCastOffset[i];
         }
+
+        // GRANULAR FILTERING: Applies to all spells globally if enabled (v3.0 Ultra-Granular)
+        if (g_hideAllSpells) {
+            rec->m_precastKit = 0;
+            rec->m_castKit = 0;
+            rec->m_impactKit = 0;
+            rec->m_stateKit = 0;
+            rec->m_stateDoneKit = 0;
+            rec->m_channelKit = 0;
+            rec->m_hasMissile = 0;
+            rec->m_missileModel = 0;
+            rec->m_missileSound = 0;
+            rec->m_animEventSoundID = 0;
+            rec->m_flags = 0; 
+            rec->m_casterImpactKit = 0;
+            rec->m_targetImpactKit = 0;
+            rec->m_missileTargetingKit = 0;
+            rec->m_instantAreaKit = 0;
+            rec->m_impactAreaKit = 0;
+            rec->m_persistentAreaKit = 0;
+        }
+
+        if (g_hidePrecast) rec->m_precastKit = 0;
+        if (g_hideCast) {
+            rec->m_castKit = 0;
+            rec->m_flags &= ~0x1;
+        }
+        if (g_hideChannel) rec->m_channelKit = 0;
+        
+        if (g_hideImpactTarget) {
+            rec->m_impactKit = 0;
+            rec->m_casterImpactKit = 0;
+            rec->m_targetImpactKit = 0;
+        }
+        if (g_hideImpactArea) {
+            rec->m_instantAreaKit = 0;
+            rec->m_impactAreaKit = 0;
+            rec->m_flags &= ~0x2;
+        }
+        
+        if (g_hideGround) {
+            rec->m_persistentAreaKit = 0;
+            rec->m_instantAreaKit = 0; // Sometimes impact areas leave ground effects
+        }
+        
+        if (g_hideMissile) {
+            rec->m_hasMissile = 0;
+            rec->m_missileModel = 0;
+            rec->m_missileTargetingKit = 0;
+            rec->m_missileSound = 0;
+            rec->m_flags &= ~0x4;
+        }
+        
+        if (g_hideAura) {
+            rec->m_stateKit = 0;
+            rec->m_stateDoneKit = 0;
+        }
+        
+        if (g_hideAudio) {
+            rec->m_missileSound = 0;
+            rec->m_animEventSoundID = 0;
+        }
+
         return true;
     }
 
-    static SpellVisualRec* BuildSanitizedSpellVisual(const SpellVisualRec* src, const SpellVisualRec* original) {
-        if (!src) return nullptr;
 
-        uint32_t targetVid = src->m_ID;
-        uint32_t originalVid = original ? original->m_ID : 0;
-        
-        // Key includes generation to ensure we pick up fresh settings/original-context changes
-        // while keeping old pointers in g_sanitizedVisuals valid (eternal pointer stability).
-        uint64_t key = (static_cast<uint64_t>(g_morphGeneration) << 48) | 
-                       (static_cast<uint64_t>(originalVid) << 24) | 
-                       (targetVid & 0xFFFFFF);
 
-        // 1. Fast Path: Check Cache (Shared Lock)
-        {
-            SharedLock lock(&g_spellMorphLock);
-            auto it = g_sanitizedVisuals.find(key);
-            if (it != g_sanitizedVisuals.end()) {
-                return it->second ? it->second.get() : nullptr;
-            }
-        }
-
-        // 2. Slow Path: Work outside the lock to minimize contention
-        auto sanitized = std::make_unique<SpellVisualRec>(*src);
-        bool valid = SanitizeSpellVisualRec(sanitized.get(), original);
-
-        // 3. Write Path: Store in Cache (Exclusive Lock)
-        {
-            ExclusiveLock lock(&g_spellMorphLock);
-            // Double check in case another thread already did the work
-            auto it = g_sanitizedVisuals.find(key);
-            if (it != g_sanitizedVisuals.end()) {
-                return it->second ? it->second.get() : nullptr;
-            }
-
-            if (!valid) {
-                g_sanitizedVisuals[key] = nullptr; // Cache the failure to prevent re-sanitizing
-                return nullptr;
-            }
-
-            SpellVisualRec* finalPtr = sanitized.get();
-            g_sanitizedVisuals[key] = std::move(sanitized);
-            return finalPtr;
-        }
-    }
 
     static SpellVisualRec* GetSpellVisualRecById(uint32_t visualId) {
         return const_cast<SpellVisualRec*>(GetSafeSpellVisualRec(visualId));
@@ -560,76 +593,64 @@ namespace {
         return *reinterpret_cast<uint32_t*>(base + 227 * 4);
     }
 
+
+
     static SpellVisualRec* __cdecl Hooked_GetSpellVisualRow(SpellRec* pSpellRec) {
         if (!pSpellRec || !g_originalGetSpellVisualRow) {
             return &g_nullVisualRec;
         }
 
         __try {
-            SpellVisualRec* original = nullptr;
-            __try {
-                original = g_originalGetSpellVisualRow(pSpellRec);
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
-                return &g_nullVisualRec;
-            }
+            SpellVisualRec* original = g_originalGetSpellVisualRow(pSpellRec);
+            if (!original) return &g_nullVisualRec;
 
-            // Preserve native client behavior for non-morphed flow.
-            // Do NOT sanitize/copy native rows globally, to avoid visual regressions.
-            if (!pSpellRec) {
-                return original ? original : &g_nullVisualRec;
-            }
-
-            // HIDE ALL OTHER SPELLS LOGIC
-            if (g_hideAllOtherSpells) {
-                // Try to get the caster GUID from the spell record if possible (pseudo, as actual field may differ)
-                // For most client-side hooks, we can't get the caster directly, so we hide ALL except self-cast
-                // If you have a way to get the caster, use it here. Otherwise, this will hide all spell visuals except for the local player.
-                // For now, we assume all non-self spells are hidden.
-                // TODO: If you can get the caster GUID, compare to GetLocalPlayerGuid().
-                // If not, this will hide all spell visuals except for self-cast (which is safest for now).
-                return &g_nullVisualRec;
-            }
+            // OPTIMIZATION: Hide spells based on visibility settings (v4.0 Zero-Allocation In-Place)
+            bool granular = g_hideAllSpells || g_hidePrecast || g_hideCast || g_hideChannel || 
+                            g_hideImpactTarget || g_hideImpactArea || g_hideGround || 
+                            g_hideMissile || g_hideAura || g_hideAudio;
+            
             uint32_t sourceSpellId = static_cast<uint32_t>(pSpellRec->m_ID);
             uint32_t sourceVisualId = ResolveVisualIdFromSpellRec(pSpellRec);
 
             uint32_t targetVisualId = 0;
-            bool hasSpellMorph = false;
             AcquireSRWLockShared(&g_spellMorphLock);
-
-            // Compatibility map: source visual -> best matching target visual.
             if (sourceVisualId > 0) {
                 auto ovIt = g_visualOverrides.find(sourceVisualId);
-                if (ovIt != g_visualOverrides.end()) {
-                    targetVisualId = ovIt->second;
-                }
+                if (ovIt != g_visualOverrides.end()) targetVisualId = ovIt->second;
             }
-
             auto spellIt = g_spellMorphs.find(sourceSpellId);
             if (spellIt != g_spellMorphs.end()) {
-                hasSpellMorph = true;
-                uint32_t mappedTargetSpellId = spellIt->second;
-                if (targetVisualId == 0) {
-                    targetVisualId = SelectCompatibleTargetVisualId_NoLock(sourceSpellId, sourceVisualId, mappedTargetSpellId);
-                }
+                if (targetVisualId == 0) targetVisualId = SelectCompatibleTargetVisualId_NoLock(sourceSpellId, sourceVisualId, spellIt->second);
             }
-
             ReleaseSRWLockShared(&g_spellMorphLock);
 
-            if (!hasSpellMorph) {
-                return original ? original : &g_nullVisualRec;
-            }
-
-            // Morph path only: return sanitized override if available.
+            SpellVisualRec* finalRow = original;
             if (targetVisualId > 0 && targetVisualId != sourceVisualId) {
                 SpellVisualRec* overrideRec = GetSpellVisualRecById(targetVisualId);
-                SpellVisualRec* safeOverride = BuildSanitizedSpellVisual(overrideRec, original);
-                if (safeOverride) {
-                    return safeOverride;
-                }
+                if (overrideRec) finalRow = overrideRec;
             }
 
-            // Fallback to native visual when morph target is invalid/unavailable.
-            return original ? original : &g_nullVisualRec;
+            // Apply In-Place Sanity/Optimization on the final row pointer (which is ALWAYS a DBC pointer now)
+            if (granular && finalRow && finalRow != &g_nullVisualRec) {
+                AcquireSRWLockExclusive(&g_spellMorphLock); // Exclusive for patching
+                if (g_sanitizedPtrGeneration[finalRow] != g_morphGeneration) {
+                    DWORD oldProt;
+                    if (VirtualProtect(finalRow, 128, PAGE_READWRITE, &oldProt)) {
+                        // Restore from disk-loaded backup if available to clear previous toggles
+                        auto itBackup = g_spellVisualRecs.find(finalRow->m_ID);
+                        if (itBackup != g_spellVisualRecs.end() && itBackup->second.size() >= 128) {
+                            std::memcpy(finalRow, itBackup->second.data(), 128);
+                        }
+
+                        SanitizeSpellVisualRec(finalRow, nullptr);
+                        VirtualProtect(finalRow, 128, oldProt, &oldProt);
+                        g_sanitizedPtrGeneration[finalRow] = g_morphGeneration;
+                    }
+                }
+                ReleaseSRWLockExclusive(&g_spellMorphLock);
+            }
+
+            return finalRow ? finalRow : &g_nullVisualRec;
         }
         __except (EXCEPTION_EXECUTE_HANDLER) {
             return &g_nullVisualRec;
@@ -637,10 +658,55 @@ namespace {
     }
 }
 
-// Command handler for Lua bridge
-extern "C" __declspec(dllexport) void SpellMorph_SetHideAllOtherSpells(int hide) {
-    SetHideAllOtherSpells(hide != 0);
-    Log("[SpellMorph] HideAllOtherSpells set to %d", hide != 0);
+// Command handlers for Lua bridge
+// Redundant exports removed from here, moving to the end of file for visibility of SoftResetCache
+
+// ------------------------------------------------------------------
+// Caster Context Tracking Hook
+// ------------------------------------------------------------------
+static const uintptr_t ADDR_GET_CAST_VISUAL = 0x0080B840;
+typedef SpellVisualRec* (__thiscall* GetCastVisualFn)(void*, SpellRec*);
+static GetCastVisualFn g_originalGetCastVisual = nullptr;
+static BYTE g_castVisualOrigBytes[5] = {0};
+
+static SpellVisualRec* __fastcall Hooked_GetCastVisual(void* pThis, void* edx, SpellRec* pSpellRec) {
+    if (pThis) {
+        // CSpell_C + 0x08 is the caster GUID in 3.3.5a 12340
+        // Correcting to fastcall/edx dummy to match thiscall register (ECX)
+        g_currentCasterGUID = *reinterpret_cast<uint64_t*>(reinterpret_cast<uintptr_t>(pThis) + 0x08);
+    }
+    
+    SpellVisualRec* res = g_originalGetCastVisual(pThis, pSpellRec);
+    
+    g_currentCasterGUID = 0; // Reset after visual resolution
+    return res;
+}
+
+static bool InstallCastVisualHook() {
+    BYTE* target = reinterpret_cast<BYTE*>(ADDR_GET_CAST_VISUAL);
+    if (target[0] != 0x55 || target[1] != 0x8B || target[2] != 0xEC) return false;
+
+    std::memcpy(g_castVisualOrigBytes, target, 5);
+    
+    void* tramp = VirtualAlloc(nullptr, 16, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) return false;
+
+    BYTE* t = reinterpret_cast<BYTE*>(tramp);
+    std::memcpy(t, g_castVisualOrigBytes, 5);
+    t[5] = 0xE9;
+    *reinterpret_cast<DWORD*>(t + 6) = (DWORD)((reinterpret_cast<uintptr_t>(target) + 5) - (reinterpret_cast<uintptr_t>(t) + 10));
+
+    g_originalGetCastVisual = reinterpret_cast<GetCastVisualFn>(tramp);
+
+    DWORD oldProt;
+    if (VirtualProtect(target, 5, PAGE_EXECUTE_READWRITE, &oldProt)) {
+        target[0] = 0xE9;
+        *reinterpret_cast<DWORD*>(target + 1) = (DWORD)(reinterpret_cast<uintptr_t>(&Hooked_GetCastVisual) - reinterpret_cast<uintptr_t>(target) - 5);
+        VirtualProtect(target, 5, oldProt, &oldProt);
+        FlushInstructionCache(GetCurrentProcess(), target, 5);
+        return true;
+    }
+    return false;
 }
 
 bool InstallSpellVisualHook() {
@@ -694,6 +760,7 @@ bool InstallSpellVisualHook() {
     g_hookInstalled = true;
 
     PreloadSpellDBC();
+    InstallCastVisualHook(); // Install the context tracker hook
 
     Log("Spell visual hook installed at 0x%08X", (unsigned)ADDR_GET_SPELL_VISUAL_ROW);
     return true;
@@ -898,4 +965,82 @@ std::string SearchSpells(const std::string& query) {
 
 size_t GetSpellDBCRecordCount() {
     return g_spellIdToVisualIdMap.size();
+}
+
+// --- Visibility Logic (Post-Namespace for SoftResetCache Access) ---
+
+void SetHideAllSpells(bool hide) { g_hideAllSpells = hide; }
+void SetHidePrecast(bool hide) { g_hidePrecast = hide; }
+void SetHideCast(bool hide) { g_hideCast = hide; }
+void SetHideChannel(bool hide) { g_hideChannel = hide; }
+void SetHideImpactTarget(bool hide) { g_hideImpactTarget = hide; }
+void SetHideImpactArea(bool hide) { g_hideImpactArea = hide; }
+void SetHideGround(bool hide) { g_hideGround = hide; }
+void SetHideMissile(bool hide) { g_hideMissile = hide; }
+void SetHideAura(bool hide) { g_hideAura = hide; }
+void SetHideAudio(bool hide) { g_hideAudio = hide; }
+
+bool GetHideAllSpells() { return g_hideAllSpells; }
+bool GetHidePrecast() { return g_hidePrecast; }
+bool GetHideCast() { return g_hideCast; }
+bool GetHideChannel() { return g_hideChannel; }
+bool GetHideImpactTarget() { return g_hideImpactTarget; }
+bool GetHideImpactArea() { return g_hideImpactArea; }
+bool GetHideGround() { return g_hideGround; }
+bool GetHideMissile() { return g_hideMissile; }
+bool GetHideAura() { return g_hideAura; }
+bool GetHideAudio() { return g_hideAudio; }
+
+void SpellMorph_SoftResetCache() {
+    SoftResetCache();
+}
+
+extern "C" __declspec(dllexport) void SpellMorph_SetHideAll(int hide) {
+    SetHideAllSpells(hide != 0);
+    SoftResetCache();
+}
+
+extern "C" __declspec(dllexport) void SpellMorph_SetHidePrecast(int hide) {
+    SetHidePrecast(hide != 0);
+    SoftResetCache();
+}
+
+extern "C" __declspec(dllexport) void SpellMorph_SetHideCast(int hide) {
+    SetHideCast(hide != 0);
+    SoftResetCache();
+}
+
+extern "C" __declspec(dllexport) void SpellMorph_SetHideChannel(int hide) {
+    SetHideChannel(hide != 0);
+    SoftResetCache();
+}
+
+extern "C" __declspec(dllexport) void SpellMorph_SetHideImpactTarget(int hide) {
+    SetHideImpactTarget(hide != 0);
+    SoftResetCache();
+}
+
+extern "C" __declspec(dllexport) void SpellMorph_SetHideImpactArea(int hide) {
+    SetHideImpactArea(hide != 0);
+    SoftResetCache();
+}
+
+extern "C" __declspec(dllexport) void SpellMorph_SetHideGround(int hide) {
+    SetHideGround(hide != 0);
+    SoftResetCache();
+}
+
+extern "C" __declspec(dllexport) void SpellMorph_SetHideMissile(int hide) {
+    SetHideMissile(hide != 0);
+    SoftResetCache();
+}
+
+extern "C" __declspec(dllexport) void SpellMorph_SetHideAura(int hide) {
+    SetHideAura(hide != 0);
+    SoftResetCache();
+}
+
+extern "C" __declspec(dllexport) void SpellMorph_SetHideAudio(int hide) {
+    SetHideAudio(hide != 0);
+    SoftResetCache();
 }

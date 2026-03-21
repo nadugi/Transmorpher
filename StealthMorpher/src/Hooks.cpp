@@ -1,8 +1,10 @@
 #include "Hooks.h"
 #include "Logger.h"
-#include "WoWOffsets.h"
+#include "Morpher.h"
 #include "Utils.h"
+#include <windows.h>
 #include <cstdio>
+#include <cstring>
 
 // ================================================================
 // Time Hook (Refactored for Stability)
@@ -38,7 +40,7 @@ bool InstallTimeHook() {
     }
 
     // Save original bytes
-    memcpy(g_timeHookOrigBytes, (void*)TIME_HOOK_ADDR, 32);
+    std::memcpy(g_timeHookOrigBytes, (void*)TIME_HOOK_ADDR, 32);
 
     // Prepare patch: Replace function with a stub that returns our float
     // 50           push eax
@@ -48,7 +50,7 @@ bool InstallTimeHook() {
     // C3           ret
     // ... NOPs ...
     BYTE patch[16];
-    memset(patch, 0x90, 16);
+    std::memset(patch, 0x90, 16);
     
     patch[0] = 0x50;
     patch[1] = 0xB8;
@@ -58,7 +60,7 @@ bool InstallTimeHook() {
     patch[8] = 0x58;
     patch[9] = 0xC3;
     
-    memcpy((void*)TIME_HOOK_ADDR, patch, 16);
+    std::memcpy((void*)TIME_HOOK_ADDR, patch, 16);
     
     // Initialize storage
     *(float*)TIME_VAR_ADDR = g_timeOfDay;
@@ -73,7 +75,7 @@ void UninstallTimeHook() {
     
     DWORD oldProt;
     if (VirtualProtect((void*)TIME_HOOK_ADDR, 64, PAGE_EXECUTE_READWRITE, &oldProt)) {
-        memcpy((void*)TIME_HOOK_ADDR, g_timeHookOrigBytes, 32);
+        std::memcpy((void*)TIME_HOOK_ADDR, g_timeHookOrigBytes, 32);
         VirtualProtect((void*)TIME_HOOK_ADDR, 64, oldProt, &oldProt);
     }
     g_timeHookInstalled = false;
@@ -92,7 +94,6 @@ extern uint32_t g_origTitle;
 // Mount & Title Combined Hook
 // ================================================================
 extern uint32_t g_morphMount;
-#include "Morpher.h"
 
 extern uint32_t g_origMount;
 extern bool g_suspended;
@@ -107,6 +108,11 @@ static DWORD g_mountHookAddr = 0;
 static bool  g_mountHookInstalled = false;
 static BYTE  g_mountHookOrigBytes[6] = {0};
 volatile bool g_mountHookBypass = false;
+
+
+// ================================================================
+// Mount & Title Combined Hook
+// ================================================================
 
 // ================================================================
 // LAYER 1: Descriptor Hook (MountDisplayHook)
@@ -252,29 +258,49 @@ void __declspec(naked) MountDisplayHook()
         jmp do_original
 
     check_morph_active:
-        // Now check if we have an active morph
-        cmp dword ptr [g_morphDisplay], 0
-        je do_original
+        // Try active morph first
+        mov ebx, dword ptr [g_morphDisplay]
+        test ebx, ebx
+        jnz do_keep_check
+        
+        // No morph set — should we still block shapeshifts?
+        cmp dword ptr [g_keepShapeshift], 1
+        jne do_original // Not blocking
+        
+        // BLOCK: Force original race
+        mov ebx, dword ptr [g_origDisplay]
+        test ebx, ebx
+        jnz do_override_generic
+        
+        // Fallback: native race ID (0x110)
+        mov ebx, [eax+0x110]
+        test ebx, ebx
+        jz do_original
 
-        // If we are already writing the morph ID, just let it go through
-        cmp ecx, dword ptr [g_morphDisplay]
-        je do_original
+    do_override_generic:
+        mov ecx, ebx
+        jmp do_original
 
-        // Check if the game is trying to write the NATIVE display ID (Index 0x44 = 0x110)
-        // If it is, we override it with our morph to prevent flicker.
-        // If it's writing something else (like a shapeshift form), we let it pass.
-        mov ebx, [eax + 0x110] 
+    do_keep_check:
+        // Already writing the target morph?
         cmp ecx, ebx
+        je do_original
+
+        // Writing native ID? (Offset 0x110)
+        push eax
+        mov eax, [eax+0x110]
+        cmp ecx, eax
+        pop eax
         je do_override_display
         
-        // Also override if the game writes 0 (often happens during model refreshes)
+        // Writing 0?
         test ecx, ecx
         jz do_override_display
         
-        // Shapeshift check (only relevant if we have a morph active)
+        // Shapeshift check
         cmp dword ptr [g_keepShapeshift], 1
-        je do_override_display // Hide Form
-        jmp do_original        // Show Form
+        je do_override_display
+        jmp do_original
 
     do_override_display:
         mov ecx, dword ptr [g_morphDisplay]
@@ -515,8 +541,24 @@ void __declspec(naked) UpdateDisplayInfoHook()
 
     handle_base_morph:
         mov ebx, dword ptr [g_morphDisplay]
-        cmp ebx, 0
-        je pop_ebx_and_cont
+        test ebx, ebx
+        jnz write_base_morph
+        
+        // No active morph — should we still block shapeshifts on original race?
+        cmp dword ptr [g_keepShapeshift], 1
+        jne pop_ebx_and_cont
+        
+        // Block: We want the original race ID
+        mov ebx, dword ptr [g_origDisplay]
+        test ebx, ebx
+        jnz write_base_morph
+        
+        // Fallback: Use NATIVE display ID from descriptors (Index 0x44 = 0x110)
+        mov ebx, [eax+0x110]
+        test ebx, ebx
+        jz pop_ebx_and_cont
+
+    write_base_morph:
         cmp [eax+0x10C], ebx
         je pop_ebx_and_cont
         mov [eax+0x10C], ebx
@@ -571,7 +613,7 @@ bool InstallUpdateDisplayInfoHook()
         // Fallback
         g_updateDisplayHookAddr = base + 0x33E410;
         if (CGUnit_UpdateDisplayInfo) {
-            g_updateDisplayHookAddr = (DWORD)CGUnit_UpdateDisplayInfo;
+            g_updateDisplayHookAddr = (DWORD)(uintptr_t)CGUnit_UpdateDisplayInfo;
         }
     }
     
@@ -605,33 +647,33 @@ bool InstallUpdateDisplayInfoHook()
         }
     } __except(1) { return false; }
 
-    memcpy(g_updateDisplayHookOrigBytes, (void*)g_updateDisplayHookAddr, hookLen);
+    std::memcpy(g_updateDisplayHookOrigBytes, (void*)(uintptr_t)g_updateDisplayHookAddr, hookLen);
 
     DWORD oldProt;
-    if (!VirtualProtect((void*)g_updateDisplayHookAddr, hookLen, PAGE_EXECUTE_READWRITE, &oldProt)) {
+    if (!VirtualProtect((void*)(uintptr_t)g_updateDisplayHookAddr, hookLen, PAGE_EXECUTE_READWRITE, &oldProt)) {
         return false;
     }
 
     // Write JMP to our hook
-    *(BYTE*)g_updateDisplayHookAddr = 0xE9;
-    *(DWORD*)(g_updateDisplayHookAddr + 1) = (DWORD)&UpdateDisplayInfoHook - g_updateDisplayHookAddr - 5;
+    *(BYTE*)(uintptr_t)g_updateDisplayHookAddr = 0xE9;
+    *(DWORD*)(uintptr_t)(g_updateDisplayHookAddr + 1) = (DWORD)((uintptr_t)&UpdateDisplayInfoHook - (uintptr_t)g_updateDisplayHookAddr - 5);
     // NOP remaining bytes
     for (int i = 5; i < hookLen; i++) {
-        *(BYTE*)(g_updateDisplayHookAddr + i) = 0x90;
+        *(BYTE*)(uintptr_t)(g_updateDisplayHookAddr + i) = 0x90;
     }
 
     g_updateDisplayHookInstalled = true;
-    Log("UpdateDisplayInfo hook installed at 0x%08X (len=%d)", g_updateDisplayHookAddr, hookLen);
+    Log("UpdateDisplayInfo hook installed at 0x%08X (len=%d)", (unsigned)g_updateDisplayHookAddr, hookLen);
     return true;
 }
-
 
 void UninstallUpdateDisplayInfoHook() {
     if (!g_updateDisplayHookInstalled || !g_updateDisplayHookAddr) return;
     DWORD oldProt;
-    if (VirtualProtect((void*)g_updateDisplayHookAddr, 5, PAGE_EXECUTE_READWRITE, &oldProt)) {
-        memcpy((void*)g_updateDisplayHookAddr, g_updateDisplayHookOrigBytes, 5);
-        VirtualProtect((void*)g_updateDisplayHookAddr, 5, oldProt, &oldProt);
+    if (VirtualProtect((void*)(uintptr_t)g_updateDisplayHookAddr, 5, PAGE_EXECUTE_READWRITE, &oldProt)) {
+        std::memcpy((void*)(uintptr_t)g_updateDisplayHookAddr, g_updateDisplayHookOrigBytes, 5);
+        VirtualProtect((void*)(uintptr_t)g_updateDisplayHookAddr, 5, oldProt, &oldProt);
+        FlushInstructionCache(GetCurrentProcess(), (void*)(uintptr_t)g_updateDisplayHookAddr, 5);
     }
     g_updateDisplayHookInstalled = false;
     Log("UpdateDisplayInfo hook uninstalled");

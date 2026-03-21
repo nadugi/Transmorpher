@@ -240,7 +240,7 @@ ns.defaultSettings = {
     saveHunterPetMorph = true,
     saveCombatPetMorph = true,
     showMetamorphosis = true,
-    showDBWProc = true,
+    showDBWProc = false,
     morphInShapeshift = false,
     worldTime = nil,
     enableWorldSync = true,
@@ -248,6 +248,17 @@ ns.defaultSettings = {
     maxVisiblePlayers = 0,
     showMinimapButton = true,
     hidePaperdollButton = false,
+    -- Optimization (Spell Visibility)
+    hideAllSpells = false,
+    hidePrecast = false,
+    hideCast = false,
+    hideChannel = false,
+    hideImpactTarget = false,
+    hideImpactArea = false,
+    hideGround = false,
+    hideMissile = false,
+    hideAura = false,
+    hideAudio = false,
 }
 
 -- ============================================================
