@@ -90,6 +90,8 @@ namespace {
     static GetSpellVisualRowFn g_originalGetSpellVisualRow = nullptr;
     static std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> g_spellIdToVisualIdMap;
     static std::unordered_map<uint32_t, void*> g_spellRowPointers; // Memory addresses of Spell.dbc rows
+    static std::unordered_map<uint32_t, SpellVisualRec*> g_visualIdToDbcPtrMap;
+    static std::unordered_map<uint32_t, uint32_t> g_visualIdToSampleSpellMap;
     static std::unordered_map<uint32_t, std::string> g_spellNames;
     static std::vector<uint8_t> g_spellStringTable;
     static bool g_dbcPreloaded = false;
@@ -98,6 +100,7 @@ namespace {
     static std::unordered_map<uint32_t, bool> g_validSpellMissiles;
     static std::unordered_map<uint32_t, bool> g_validSpellMissileMotions;
     static std::unordered_map<uint32_t, std::vector<uint8_t>> g_spellVisualRecs;
+    static std::unordered_map<void*, bool> g_backupDataPtrMap; // For fast O(1) safety checks
     
     // In-Place Optimization Data
     static std::vector<uint8_t> g_spellVisualBackup; // Original raw data of SpellVisual.dbc
@@ -208,6 +211,7 @@ namespace {
             if (fread(buffer.data(), header.recordSize, 1, f) != 1) break;
             uint32_t vid = *reinterpret_cast<uint32_t*>(buffer.data());
             g_spellVisualRecs[vid] = buffer;
+            g_backupDataPtrMap[g_spellVisualRecs[vid].data()] = true;
         }
         fclose(f);
         Log("Preloaded %u visual records from disk", (uint32_t)g_spellVisualRecs.size());
@@ -265,6 +269,9 @@ namespace {
             
             g_spellIdToVisualIdMap[id] = {v0, v1};
             g_spellRowPointers[id] = (void*)rec;
+
+            if (v0 > 0) g_visualIdToSampleSpellMap[v0] = id;
+            if (v1 > 0) g_visualIdToSampleSpellMap[v1] = id;
 
             uint32_t namePtr = *reinterpret_cast<uint32_t*>(rec + NAME_OFFSET);
             if (namePtr < h.stringTableSize) {
@@ -396,6 +403,40 @@ namespace {
 
 
 
+
+    static SpellVisualRec* GetDbcVisualRow(uint32_t visualId) {
+        if (visualId == 0) return nullptr;
+
+        // 1. Check if we already mapped this visual to a DBC pointer
+        {
+            SharedLock lock(&g_spellMorphLock);
+            auto it = g_visualIdToDbcPtrMap.find(visualId);
+            if (it != g_visualIdToDbcPtrMap.end()) return it->second;
+        }
+
+        // 2. Find any spell that natively uses this visual ID
+        uint32_t sampleSpellId = 0;
+        {
+            SharedLock lock(&g_spellMorphLock);
+            auto it = g_visualIdToSampleSpellMap.find(visualId);
+            if (it != g_visualIdToSampleSpellMap.end()) sampleSpellId = it->second;
+        }
+
+        if (sampleSpellId > 0) {
+            void* pSpellRow = g_spellRowPointers[sampleSpellId];
+            if (pSpellRow) {
+                SpellVisualRec* pDbcRow = g_originalGetSpellVisualRow(reinterpret_cast<SpellRec*>(pSpellRow));
+                if (pDbcRow) {
+                    ExclusiveLock lock(&g_spellMorphLock);
+                    g_visualIdToDbcPtrMap[visualId] = pDbcRow;
+                    return pDbcRow;
+                }
+            }
+        }
+
+        // 3. Fallback to backup ONLY if we can't find it in DBC (but this shouldn't happen for valid morphs)
+        return const_cast<SpellVisualRec*>(GetSafeSpellVisualRec(visualId));
+    }
 
     static SpellVisualRec* GetSpellVisualRecById(uint32_t visualId) {
         return const_cast<SpellVisualRec*>(GetSafeSpellVisualRec(visualId));
@@ -606,9 +647,16 @@ namespace {
 
         if (needsSync) {
             ExclusiveLock lock(&g_spellMorphLock); // Exclusive for patching
-            // Double check generation after acquiring exclusive lock
-            if (g_sanitizedPtrGeneration[finalRow] != g_morphGeneration) {
-                DWORD oldProt;
+                    // Double check generation after acquiring exclusive lock
+                    if (g_sanitizedPtrGeneration[finalRow] != g_morphGeneration) {
+                        // SAFETY: Never patch if the pointer belongs to our backup vectors (prevents corruption)
+                        // Using O(1) lookup to avoid raid lag
+                        if (g_backupDataPtrMap.count(finalRow)) {
+                            g_sanitizedPtrGeneration[finalRow] = g_morphGeneration;
+                            return;
+                        }
+
+                        DWORD oldProt;
                 if (VirtualProtect(finalRow, 128, PAGE_READWRITE, &oldProt)) {
                     // 1. ALWAYS restore from disk-loaded backup first to ensure a clean state
                     auto itBackup = g_spellVisualRecs.find(finalRow->m_ID);
@@ -661,7 +709,7 @@ namespace {
 
             SpellVisualRec* finalRow = original;
             if (targetVisualId > 0 && targetVisualId != sourceVisualId) {
-                SpellVisualRec* overrideRec = GetSpellVisualRecById(targetVisualId);
+                SpellVisualRec* overrideRec = GetDbcVisualRow(targetVisualId);
                 if (overrideRec) finalRow = overrideRec;
             }
 
