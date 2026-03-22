@@ -134,24 +134,15 @@ void __declspec(naked) MountDisplayHook()
         cmp byte ptr [g_mountHookBypass], 1
         je do_original
 
-        // GET LOCAL PLAYER GUID (Instant lookup from Object Manager)
-        mov ebx, 0x00C79CE0
-        mov ebx, [ebx]
-        test ebx, ebx
-        jz do_original
-        mov ebx, [ebx+0x2ED0]
-        test ebx, ebx
-        jz do_original
-        
+        // GET LOCAL PLAYER GUID (Direct from 0x00BD07A0)
         push edi
-        mov edi, [ebx+0xC0] // playerGuid Low
-        cmp [eax], edi
-        jne pop_edi_orig_v 
-        
-        mov edi, [ebx+0xC4] // playerGuid High
-        cmp [eax+4], edi
+        mov edi, 0x00BD07A0
+        mov ebx, [edi]      // playerGuid Low
+        cmp [eax], ebx
         jne pop_edi_orig_v
-        
+        mov ebx, [edi+4]    // playerGuid High
+        cmp [eax+4], ebx
+        jne pop_edi_orig_v
         pop edi
 
         // It is the player!
@@ -173,8 +164,11 @@ void __declspec(naked) MountDisplayHook()
         jne check_display_id
 
         cmp ecx, 0 // Dismount
-        je do_original
+        jne save_mount_orig
+        mov dword ptr [g_origMount], 0
+        jmp do_original
 
+    save_mount_orig:
         mov dword ptr [g_origMount], ecx
         cmp dword ptr [g_morphMount], 0
         je do_original

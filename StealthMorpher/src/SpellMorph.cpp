@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <psapi.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <cstring>
 #include <string>
@@ -26,6 +27,9 @@
     static bool g_hideMissileMarker = false;
     static bool g_hideSoundMissile = false;
     static bool g_hideSoundEvent = false;
+
+    static std::unordered_set<uint32_t> g_whiteCardSpells; // Custom Protection Whitelist
+    static SRWLOCK g_whiteCardLock = SRWLOCK_INIT;
 
 // Use thread_local to track which unit is currently requesting a visual
 static thread_local uint64_t g_currentCasterGUID = 0;
@@ -116,6 +120,7 @@ namespace {
     static void* g_spellVisualBaseAddr = nullptr;
     static uint32_t g_spellVisualRecordCount = 0;
     static uint32_t g_spellVisualRecordSize = 0;
+
 
     static uint32_t g_morphGeneration = 0;
     static std::unordered_map<void*, uint32_t> g_sanitizedPtrGeneration; 
@@ -647,6 +652,44 @@ namespace {
         return false;
     }
 
+    static bool IsWhiteCardSpell(uint32_t spellId) {
+        SharedLock lock(&g_whiteCardLock);
+        if (g_whiteCardSpells.count(spellId)) return true;
+        return false;
+    }
+
+    // ================================================================
+    // HARDCODED CRITICAL VISUALS (Never hide these)
+    // Includes ICC mechanics, custom RS patches, and essential buffs.
+    // ================================================================
+    static bool IsCriticalVisual(uint32_t spellId, uint32_t visualId) {
+        // 1. High ID bypass (Assume custom patch/essential mechanic)
+        // User requested bypass for IDs > 80864.
+        if (spellId > 80864 || visualId > 80864) return true;
+
+        // 2. Hardcoded Critical Spell IDs
+        static const std::unordered_set<uint32_t> criticalSpells = {
+            71049, 70126, 73785, 73912, 66882, 65544, 69279, 69766, 71255, 53338, 
+            71939, 70873, 72743, 69076, 74275, 71150, 70901, 71255, 49065, 15473,
+            70867, 72143, 72530, 72037, 72039, 71255, 70901
+        };
+        if (criticalSpells.count(spellId)) return true;
+
+        // 3. Hardcoded Critical Visual IDs (SpellVisual.dbc)
+        static const std::unordered_set<uint32_t> criticalVisuals = {
+            15254, 14858, 14864, 14561, 14562, 14204, 7428, 13409, 14369, 118, 
+            10149, 14634, 13503, 15197, 13923, 15076, 2950, 13721, 14053, 13867, 
+            15116, 9629, 15006, 10389, 3619, 761, 15164, 1523, 13932, 14111, 4856,
+            12818
+        };
+        if (criticalVisuals.count(visualId)) return true;
+
+        // 4. White Card (Active User Whitelist)
+        if (IsWhiteCardSpell(spellId)) return true;
+
+        return false;
+    }
+
 
 
     static void SynchronizeSpellVisualRow(SpellVisualRec* finalRow, bool granular) {
@@ -710,12 +753,12 @@ namespace {
                             g_hideAreaPersistent || g_hideMissile || g_hideMissileMarker || 
                             g_hideSoundMissile || g_hideSoundEvent);
 
-            if (granular && IsBossContext(g_currentCasterGUID)) {
-                granular = false; // Bypass optimization for boss abilities
-            }
-            
             uint32_t sourceSpellId = static_cast<uint32_t>(pSpellRec->m_ID);
             uint32_t sourceVisualId = ResolveVisualIdFromSpellRec(pSpellRec);
+
+            if (granular && (IsBossContext(g_currentCasterGUID) || IsCriticalVisual(sourceSpellId, sourceVisualId))) {
+                granular = false; // Bypass optimization for boss or whitelisted abilities
+            }
 
             uint32_t targetVisualId = 0;
             AcquireSRWLockShared(&g_spellMorphLock);
@@ -1121,3 +1164,25 @@ extern "C" __declspec(dllexport) void SpellMorph_SetHideMissile(int hide)   { Se
 extern "C" __declspec(dllexport) void SpellMorph_SetHideMissileM(int hide)  { SetHideMissileMarker(hide != 0); SoftResetCache(); }
 extern "C" __declspec(dllexport) void SpellMorph_SetHideSoundM(int hide)    { SetHideSoundMissile(hide != 0); SoftResetCache(); }
 extern "C" __declspec(dllexport) void SpellMorph_SetHideSoundE(int hide)    { SetHideSoundEvent(hide != 0); SoftResetCache(); }
+
+extern "C" {
+    void SpellMorph_AddWhiteCard(int spellId) {
+        if (spellId <= 0) return;
+        ExclusiveLock lock(&g_whiteCardLock);
+        g_whiteCardSpells.insert((uint32_t)spellId);
+        SoftResetCache();
+    }
+
+    void SpellMorph_RemoveWhiteCard(int spellId) {
+        if (spellId <= 0) return;
+        ExclusiveLock lock(&g_whiteCardLock);
+        g_whiteCardSpells.erase((uint32_t)spellId);
+        SoftResetCache();
+    }
+
+    void SpellMorph_ClearWhiteCard() {
+        ExclusiveLock lock(&g_whiteCardLock);
+        g_whiteCardSpells.clear();
+        SoftResetCache();
+    }
+}

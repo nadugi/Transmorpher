@@ -42,6 +42,12 @@ void SetHideSoundEvent(bool hide);
 
 void SpellMorph_SoftResetCache();
 
+extern "C" {
+    __declspec(dllexport) void SpellMorph_AddWhiteCard(int spellId);
+    __declspec(dllexport) void SpellMorph_RemoveWhiteCard(int spellId);
+    __declspec(dllexport) void SpellMorph_ClearWhiteCard();
+}
+
 bool GetHideAllSpells();
 bool GetHidePrecast();
 bool GetHideCast();

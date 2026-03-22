@@ -918,19 +918,28 @@ bool DoMorph(const char* cmd, WowObject* player) {
         update = false;
     }
     else if (strncmp(cmd, "MOUNT_RESET", 11) == 0) {
-        if (g_morphMount == 0) return false;
         g_morphMount = 0;
         
-        if (g_luaMounted == 1) {
-            *(uint32_t*)(desc + UNIT_FIELD_MOUNTDISPLAYID) = g_origMount;
-            *(uint32_t*)((uint8_t*)player + 0x9C0) = g_origMount;
-            
+        // Safety: only restore original mount if we are actually mounted.
+        // If g_luaMounted == 0, we must force the mount ID to 0 to prevent ghost visuals.
+        uint32_t targetMount = (g_luaMounted == 1) ? g_origMount : 0;
+        
+        *(uint32_t*)(desc + UNIT_FIELD_MOUNTDISPLAYID) = targetMount;
+        *(uint32_t*)((uint8_t*)player + 0x9C0) = targetMount;
+        
+        if (targetMount == 0) {
+            if (CGUnit_C_DismountModel) {
+                __try { CGUnit_C_DismountModel(player, 0); } __except(1) {}
+            }
+            Log("Mount morph reset: Dismounted (Safety sync)");
+        } else {
             if (CGUnit_C_DismountModel) {
                 __try { CGUnit_C_DismountModel(player, 0); } __except(1) {}
             }
             if (CGUnit_C_MountModel) {
                 __try { CGUnit_C_MountModel(player, 0, 0); } __except(1) {}
             }
+            Log("Mount morph reset: Restored original %u", targetMount);
         }
         update = false;
     }
@@ -1220,6 +1229,17 @@ bool DoMorph(const char* cmd, WowObject* player) {
     }
     else if (strncmp(cmd, "SPELL_RESET_ALL", 15) == 0) {
         ClearSpellMorphs();
+    }
+    else if (strncmp(cmd, "SPELL_WHITE_CARD:", 17) == 0) {
+        uint32_t id = (uint32_t)atoi(cmd + 17);
+        SpellMorph_AddWhiteCard(id);
+    }
+    else if (strncmp(cmd, "SPELL_WHITE_REMOVE:", 19) == 0) {
+        uint32_t id = (uint32_t)atoi(cmd + 19);
+        SpellMorph_RemoveWhiteCard(id);
+    }
+    else if (strncmp(cmd, "SPELL_WHITE_CLEAR", 17) == 0) {
+        SpellMorph_ClearWhiteCard();
     }
     else if (strncmp(cmd, "RESET:", 6) == 0 && cmd[6] >= '0' && cmd[6] <= '9') {
         int slot = 0;
