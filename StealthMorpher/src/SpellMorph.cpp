@@ -10,16 +10,22 @@
 #include <cmath>
 #include <memory>
 
-static bool g_hideAllSpells = false;
-static bool g_hidePrecast = false;
-static bool g_hideCast = false;
-static bool g_hideChannel = false;
-static bool g_hideImpactTarget = false;
-static bool g_hideImpactArea = false;
-static bool g_hideGround = false;
-static bool g_hideMissile = false;
-static bool g_hideAura = false;
-static bool g_hideAudio = false;
+    static bool g_hideAllSpells = false;
+    static bool g_hidePrecast = false;
+    static bool g_hideCast = false;
+    static bool g_hideChannel = false;
+    static bool g_hideAuraStart = false;
+    static bool g_hideAuraEnd = false;
+    static bool g_hideImpact = false;
+    static bool g_hideImpactCaster = false;
+    static bool g_hideTargetImpact = false;
+    static bool g_hideAreaInstant = false;
+    static bool g_hideAreaImpact = false;
+    static bool g_hideAreaPersistent = false;
+    static bool g_hideMissile = false;
+    static bool g_hideMissileMarker = false;
+    static bool g_hideSoundMissile = false;
+    static bool g_hideSoundEvent = false;
 
 // Use thread_local to track which unit is currently requesting a visual
 static thread_local uint64_t g_currentCasterGUID = 0;
@@ -67,6 +73,10 @@ namespace {
     static const size_t MAX_SPELL_MORPHS = 128;
 
     typedef SpellVisualRec* (__cdecl* GetSpellVisualRowFn)(SpellRec*);
+    typedef SpellVisualRec* (__thiscall* GetVisualRowByIdFn)(void*, uint32_t);
+
+    static const uintptr_t ADDR_SPELL_VISUAL_DB = 0x00D94AF8;
+    static const uintptr_t ADDR_GET_VISUAL_ROW  = 0x00475E80;
 
     // RAII Lock wrappers to prevent deadlocks on exceptions/early returns
     struct SharedLock {
@@ -91,7 +101,6 @@ namespace {
     static std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> g_spellIdToVisualIdMap;
     static std::unordered_map<uint32_t, void*> g_spellRowPointers; // Memory addresses of Spell.dbc rows
     static std::unordered_map<uint32_t, SpellVisualRec*> g_visualIdToDbcPtrMap;
-    static std::unordered_map<uint32_t, uint32_t> g_visualIdToSampleSpellMap;
     static std::unordered_map<uint32_t, std::string> g_spellNames;
     static std::vector<uint8_t> g_spellStringTable;
     static bool g_dbcPreloaded = false;
@@ -110,6 +119,7 @@ namespace {
 
     static uint32_t g_morphGeneration = 0;
     static std::unordered_map<void*, uint32_t> g_sanitizedPtrGeneration; 
+    static std::unordered_map<void*, bool> g_lastGranularState; 
     static SpellVisualRec g_nullVisualRec = {};
 
     static void SoftResetCache() {
@@ -270,8 +280,6 @@ namespace {
             g_spellIdToVisualIdMap[id] = {v0, v1};
             g_spellRowPointers[id] = (void*)rec;
 
-            if (v0 > 0) g_visualIdToSampleSpellMap[v0] = id;
-            if (v1 > 0) g_visualIdToSampleSpellMap[v1] = id;
 
             uint32_t namePtr = *reinterpret_cast<uint32_t*>(rec + NAME_OFFSET);
             if (namePtr < h.stringTableSize) {
@@ -337,6 +345,8 @@ namespace {
         }
 
         // GRANULAR FILTERING: Applies to all spells globally if enabled (v3.0 Ultra-Granular)
+        // Animation Safety (v4.3): Only clear kits, PRESERVE flags and attachments
+        // Clearing flags can break the client's internal animation state machine (e.g. Frostbolt queuing)
         if (g_hideAllSpells) {
             rec->m_precastKit = 0;
             rec->m_castKit = 0;
@@ -344,11 +354,10 @@ namespace {
             rec->m_stateKit = 0;
             rec->m_stateDoneKit = 0;
             rec->m_channelKit = 0;
-            rec->m_hasMissile = 0;
+            rec->m_hasMissile = 0; 
             rec->m_missileModel = 0;
             rec->m_missileSound = 0;
             rec->m_animEventSoundID = 0;
-            rec->m_flags = 0; 
             rec->m_casterImpactKit = 0;
             rec->m_targetImpactKit = 0;
             rec->m_missileTargetingKit = 0;
@@ -358,51 +367,41 @@ namespace {
         }
 
         if (g_hidePrecast) rec->m_precastKit = 0;
-        if (g_hideCast) {
-            rec->m_castKit = 0;
-            rec->m_flags &= ~0x1;
-        }
+        if (g_hideCast)    rec->m_castKit = 0;
         if (g_hideChannel) rec->m_channelKit = 0;
-        
-        if (g_hideImpactTarget) {
-            rec->m_impactKit = 0;
-            rec->m_casterImpactKit = 0;
-            rec->m_targetImpactKit = 0;
-        }
-        if (g_hideImpactArea) {
-            rec->m_instantAreaKit = 0;
-            rec->m_impactAreaKit = 0;
-            rec->m_flags &= ~0x2;
-        }
-        
-        if (g_hideGround) {
-            rec->m_persistentAreaKit = 0;
-            rec->m_instantAreaKit = 0; // Sometimes impact areas leave ground effects
-        }
-        
+        if (g_hideAuraStart) rec->m_stateKit = 0;
+        if (g_hideAuraEnd)   rec->m_stateDoneKit = 0;
+
+        if (g_hideImpact)       rec->m_impactKit = 0;
+        if (g_hideImpactCaster)  rec->m_casterImpactKit = 0;
+        if (g_hideTargetImpact)  rec->m_targetImpactKit = 0;
+
+        if (g_hideAreaInstant)   rec->m_instantAreaKit = 0;
+        if (g_hideAreaImpact)    rec->m_impactAreaKit = 0;
+        if (g_hideAreaPersistent) rec->m_persistentAreaKit = 0;
+
         if (g_hideMissile) {
             rec->m_hasMissile = 0;
             rec->m_missileModel = 0;
-            rec->m_missileTargetingKit = 0;
-            rec->m_missileSound = 0;
-            rec->m_flags &= ~0x4;
         }
-        
-        if (g_hideAura) {
-            rec->m_stateKit = 0;
-            rec->m_stateDoneKit = 0;
-        }
-        
-        if (g_hideAudio) {
-            rec->m_missileSound = 0;
-            rec->m_animEventSoundID = 0;
-        }
+        if (g_hideMissileMarker) rec->m_missileTargetingKit = 0;
+
+        if (g_hideSoundMissile) rec->m_missileSound = 0;
+        if (g_hideSoundEvent)   rec->m_animEventSoundID = 0;
 
         return true;
     }
 
 
 
+
+    static SpellVisualRec* GetLiveVisualRow(uint32_t visualId) {
+        if (visualId == 0) return nullptr;
+        void* db = *reinterpret_cast<void**>(ADDR_SPELL_VISUAL_DB);
+        if (!db) return nullptr;
+        GetVisualRowByIdFn fn = reinterpret_cast<GetVisualRowByIdFn>(ADDR_GET_VISUAL_ROW);
+        return fn(db, visualId);
+    }
 
     static SpellVisualRec* GetDbcVisualRow(uint32_t visualId) {
         if (visualId == 0) return nullptr;
@@ -414,27 +413,15 @@ namespace {
             if (it != g_visualIdToDbcPtrMap.end()) return it->second;
         }
 
-        // 2. Find any spell that natively uses this visual ID
-        uint32_t sampleSpellId = 0;
-        {
-            SharedLock lock(&g_spellMorphLock);
-            auto it = g_visualIdToSampleSpellMap.find(visualId);
-            if (it != g_visualIdToSampleSpellMap.end()) sampleSpellId = it->second;
+        // 2. Use direct DBC lookup (Robust v4.2)
+        SpellVisualRec* pLiveRow = GetLiveVisualRow(visualId);
+        if (pLiveRow) {
+            ExclusiveLock lock(&g_spellMorphLock);
+            g_visualIdToDbcPtrMap[visualId] = pLiveRow;
+            return pLiveRow;
         }
 
-        if (sampleSpellId > 0) {
-            void* pSpellRow = g_spellRowPointers[sampleSpellId];
-            if (pSpellRow) {
-                SpellVisualRec* pDbcRow = g_originalGetSpellVisualRow(reinterpret_cast<SpellRec*>(pSpellRow));
-                if (pDbcRow) {
-                    ExclusiveLock lock(&g_spellMorphLock);
-                    g_visualIdToDbcPtrMap[visualId] = pDbcRow;
-                    return pDbcRow;
-                }
-            }
-        }
-
-        // 3. Fallback to backup ONLY if we can't find it in DBC (but this shouldn't happen for valid morphs)
+        // 3. Fallback to backup ONLY if we can't find it in DBC (Safety)
         return const_cast<SpellVisualRec*>(GetSafeSpellVisualRec(visualId));
     }
 
@@ -634,6 +621,32 @@ namespace {
         return *reinterpret_cast<uint32_t*>(base + 227 * 4);
     }
 
+    static bool IsBossContext(uint64_t guid) {
+        if (guid == 0) return false;
+
+        // Use ClntObjMgrGetActiveObject (0x004D4DB0) to find the unit
+        typedef void* (__cdecl* tGetObj)(uint64_t);
+        tGetObj GetObj = (tGetObj)0x004D4DB0;
+        void* obj = GetObj(guid);
+        if (!obj) return false;
+
+        // Safety: Verify object type (Unit = 3, Player = 4)
+        uint32_t type = *(uint32_t*)((uint8_t*)obj + 0x20);
+        if (type != 3 && type != 4) return false;
+        
+        if (type == 3) {
+            // Check Classification: 0=Normal, 1=Elite, 2=RareElite, 3=WorldBoss, 4=Rare
+            typedef uint32_t (__thiscall* tGetClass)(void*);
+            tGetClass GetClass = (tGetClass)0x007119F0;
+            uint32_t classification = GetClass(obj);
+
+            // WorldBoss (3) or Level ?? boss logic
+            if (classification == 3) return true;
+        }
+
+        return false;
+    }
+
 
 
     static void SynchronizeSpellVisualRow(SpellVisualRec* finalRow, bool granular) {
@@ -642,13 +655,14 @@ namespace {
         bool needsSync = false;
         {
             SharedLock lock(&g_spellMorphLock);
-            needsSync = (g_sanitizedPtrGeneration[finalRow] != g_morphGeneration);
+            needsSync = (g_sanitizedPtrGeneration[finalRow] != g_morphGeneration) || 
+                        (g_lastGranularState[finalRow] != granular);
         }
 
         if (needsSync) {
             ExclusiveLock lock(&g_spellMorphLock); // Exclusive for patching
-                    // Double check generation after acquiring exclusive lock
-                    if (g_sanitizedPtrGeneration[finalRow] != g_morphGeneration) {
+                    // Double check generation/state after acquiring exclusive lock
+                    if (g_sanitizedPtrGeneration[finalRow] != g_morphGeneration || g_lastGranularState[finalRow] != granular) {
                         // SAFETY: Never patch if the pointer belongs to our backup vectors (prevents corruption)
                         // Using O(1) lookup to avoid raid lag
                         if (g_backupDataPtrMap.count(finalRow)) {
@@ -672,6 +686,7 @@ namespace {
                     DWORD dummy;
                     VirtualProtect(finalRow, 128, oldProt, &dummy);
                     g_sanitizedPtrGeneration[finalRow] = g_morphGeneration;
+                    g_lastGranularState[finalRow] = granular;
                 }
             }
         }
@@ -688,9 +703,16 @@ namespace {
             if (!original) return &g_nullVisualRec;
 
             // OPTIMIZATION: Hide spells based on visibility settings (v4.0 Zero-Allocation In-Place)
-            bool granular = g_hideAllSpells || g_hidePrecast || g_hideCast || g_hideChannel || 
-                            g_hideImpactTarget || g_hideImpactArea || g_hideGround || 
-                            g_hideMissile || g_hideAura || g_hideAudio;
+            // BOSS PROTECTION [v5.0]: Check if caster is a boss to prevent hiding critical mechanics
+            bool granular = (g_hideAllSpells || g_hidePrecast || g_hideCast || g_hideChannel || 
+                            g_hideAuraStart || g_hideAuraEnd || g_hideImpact || g_hideImpactCaster || 
+                            g_hideTargetImpact || g_hideAreaInstant || g_hideAreaImpact || 
+                            g_hideAreaPersistent || g_hideMissile || g_hideMissileMarker || 
+                            g_hideSoundMissile || g_hideSoundEvent);
+
+            if (granular && IsBossContext(g_currentCasterGUID)) {
+                granular = false; // Bypass optimization for boss abilities
+            }
             
             uint32_t sourceSpellId = static_cast<uint32_t>(pSpellRec->m_ID);
             uint32_t sourceVisualId = ResolveVisualIdFromSpellRec(pSpellRec);
@@ -716,7 +738,11 @@ namespace {
 
 
 
-            SynchronizeSpellVisualRow(finalRow, granular);
+            // OPTIMIZATION: Only synchronize if generation is behind OR granular state changed.
+            // This avoids redundant map lookups and memory protection calls in every frame.
+            if (g_sanitizedPtrGeneration[finalRow] != g_morphGeneration || g_lastGranularState[finalRow] != granular) {
+                SynchronizeSpellVisualRow(finalRow, granular);
+            }
 
             return finalRow ? finalRow : &g_nullVisualRec;
         }
@@ -1039,25 +1065,37 @@ size_t GetSpellDBCRecordCount() {
 
 void SetHideAllSpells(bool hide) { g_hideAllSpells = hide; }
 void SetHidePrecast(bool hide) { g_hidePrecast = hide; }
-void SetHideCast(bool hide) { g_hideCast = hide; }
+void SetHideCast(bool hide)    { g_hideCast = hide; }
 void SetHideChannel(bool hide) { g_hideChannel = hide; }
-void SetHideImpactTarget(bool hide) { g_hideImpactTarget = hide; }
-void SetHideImpactArea(bool hide) { g_hideImpactArea = hide; }
-void SetHideGround(bool hide) { g_hideGround = hide; }
-void SetHideMissile(bool hide) { g_hideMissile = hide; }
-void SetHideAura(bool hide) { g_hideAura = hide; }
-void SetHideAudio(bool hide) { g_hideAudio = hide; }
+void SetHideAuraStart(bool hide) { g_hideAuraStart = hide; }
+void SetHideAuraEnd(bool hide)   { g_hideAuraEnd = hide; }
+void SetHideImpact(bool hide)    { g_hideImpact = hide; }
+void SetHideImpactCaster(bool hide) { g_hideImpactCaster = hide; }
+void SetHideTargetImpact(bool hide) { g_hideTargetImpact = hide; }
+void SetHideAreaInstant(bool hide)  { g_hideAreaInstant = hide; }
+void SetHideAreaImpact(bool hide)   { g_hideAreaImpact = hide; }
+void SetHideAreaPersistent(bool hide) { g_hideAreaPersistent = hide; }
+void SetHideMissile(bool hide)      { g_hideMissile = hide; }
+void SetHideMissileMarker(bool hide) { g_hideMissileMarker = hide; }
+void SetHideSoundMissile(bool hide) { g_hideSoundMissile = hide; }
+void SetHideSoundEvent(bool hide)   { g_hideSoundEvent = hide; }
 
 bool GetHideAllSpells() { return g_hideAllSpells; }
-bool GetHidePrecast() { return g_hidePrecast; }
-bool GetHideCast() { return g_hideCast; }
-bool GetHideChannel() { return g_hideChannel; }
-bool GetHideImpactTarget() { return g_hideImpactTarget; }
-bool GetHideImpactArea() { return g_hideImpactArea; }
-bool GetHideGround() { return g_hideGround; }
-bool GetHideMissile() { return g_hideMissile; }
-bool GetHideAura() { return g_hideAura; }
-bool GetHideAudio() { return g_hideAudio; }
+bool GetHidePrecast()   { return g_hidePrecast; }
+bool GetHideCast()      { return g_hideCast; }
+bool GetHideChannel()   { return g_hideChannel; }
+bool GetHideAuraStart() { return g_hideAuraStart; }
+bool GetHideAuraEnd()   { return g_hideAuraEnd; }
+bool GetHideImpact()    { return g_hideImpact; }
+bool GetHideImpactCaster() { return g_hideImpactCaster; }
+bool GetHideTargetImpact() { return g_hideTargetImpact; }
+bool GetHideAreaInstant()  { return g_hideAreaInstant; }
+bool GetHideAreaImpact()   { return g_hideAreaImpact; }
+bool GetHideAreaPersistent() { return g_hideAreaPersistent; }
+bool GetHideMissile()      { return g_hideMissile; }
+bool GetHideMissileMarker() { return g_hideMissileMarker; }
+bool GetHideSoundMissile() { return g_hideSoundMissile; }
+bool GetHideSoundEvent()   { return g_hideSoundEvent; }
 
 void SpellMorph_SoftResetCache() {
     SoftResetCache();
@@ -1068,47 +1106,18 @@ extern "C" __declspec(dllexport) void SpellMorph_SetHideAll(int hide) {
     SoftResetCache();
 }
 
-extern "C" __declspec(dllexport) void SpellMorph_SetHidePrecast(int hide) {
-    SetHidePrecast(hide != 0);
-    SoftResetCache();
-}
-
-extern "C" __declspec(dllexport) void SpellMorph_SetHideCast(int hide) {
-    SetHideCast(hide != 0);
-    SoftResetCache();
-}
-
-extern "C" __declspec(dllexport) void SpellMorph_SetHideChannel(int hide) {
-    SetHideChannel(hide != 0);
-    SoftResetCache();
-}
-
-extern "C" __declspec(dllexport) void SpellMorph_SetHideImpactTarget(int hide) {
-    SetHideImpactTarget(hide != 0);
-    SoftResetCache();
-}
-
-extern "C" __declspec(dllexport) void SpellMorph_SetHideImpactArea(int hide) {
-    SetHideImpactArea(hide != 0);
-    SoftResetCache();
-}
-
-extern "C" __declspec(dllexport) void SpellMorph_SetHideGround(int hide) {
-    SetHideGround(hide != 0);
-    SoftResetCache();
-}
-
-extern "C" __declspec(dllexport) void SpellMorph_SetHideMissile(int hide) {
-    SetHideMissile(hide != 0);
-    SoftResetCache();
-}
-
-extern "C" __declspec(dllexport) void SpellMorph_SetHideAura(int hide) {
-    SetHideAura(hide != 0);
-    SoftResetCache();
-}
-
-extern "C" __declspec(dllexport) void SpellMorph_SetHideAudio(int hide) {
-    SetHideAudio(hide != 0);
-    SoftResetCache();
-}
+extern "C" __declspec(dllexport) void SpellMorph_SetHidePrecast(int hide) { SetHidePrecast(hide != 0); SoftResetCache(); }
+extern "C" __declspec(dllexport) void SpellMorph_SetHideCast(int hide)    { SetHideCast(hide != 0); SoftResetCache(); }
+extern "C" __declspec(dllexport) void SpellMorph_SetHideChannel(int hide) { SetHideChannel(hide != 0); SoftResetCache(); }
+extern "C" __declspec(dllexport) void SpellMorph_SetHideAuraStart(int hide) { SetHideAuraStart(hide != 0); SoftResetCache(); }
+extern "C" __declspec(dllexport) void SpellMorph_SetHideAuraEnd(int hide)   { SetHideAuraEnd(hide != 0); SoftResetCache(); }
+extern "C" __declspec(dllexport) void SpellMorph_SetHideImpact(int hide)    { SetHideImpact(hide != 0); SoftResetCache(); }
+extern "C" __declspec(dllexport) void SpellMorph_SetHideImpactC(int hide)   { SetHideImpactCaster(hide != 0); SoftResetCache(); }
+extern "C" __declspec(dllexport) void SpellMorph_SetHideImpactT(int hide)   { SetHideTargetImpact(hide != 0); SoftResetCache(); }
+extern "C" __declspec(dllexport) void SpellMorph_SetHideAreaInst(int hide)  { SetHideAreaInstant(hide != 0); SoftResetCache(); }
+extern "C" __declspec(dllexport) void SpellMorph_SetHideAreaImp(int hide)   { SetHideAreaImpact(hide != 0); SoftResetCache(); }
+extern "C" __declspec(dllexport) void SpellMorph_SetHideAreaPers(int hide)  { SetHideAreaPersistent(hide != 0); SoftResetCache(); }
+extern "C" __declspec(dllexport) void SpellMorph_SetHideMissile(int hide)   { SetHideMissile(hide != 0); SoftResetCache(); }
+extern "C" __declspec(dllexport) void SpellMorph_SetHideMissileM(int hide)  { SetHideMissileMarker(hide != 0); SoftResetCache(); }
+extern "C" __declspec(dllexport) void SpellMorph_SetHideSoundM(int hide)    { SetHideSoundMissile(hide != 0); SoftResetCache(); }
+extern "C" __declspec(dllexport) void SpellMorph_SetHideSoundE(int hide)    { SetHideSoundEvent(hide != 0); SoftResetCache(); }

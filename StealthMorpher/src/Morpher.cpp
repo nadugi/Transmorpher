@@ -989,18 +989,43 @@ bool DoMorph(const char* cmd, WowObject* player) {
         SpellMorph_SoftResetCache();
         update = false;
     }
+    else if (strncmp(cmd, "SET:HIDE_AURA_START:", 20) == 0) {
+        SetHideAuraStart(atoi(cmd + 20) > 0);
+        SpellMorph_SoftResetCache();
+        update = false;
+    }
+    else if (strncmp(cmd, "SET:HIDE_AURA_END:", 18) == 0) {
+        SetHideAuraEnd(atoi(cmd + 18) > 0);
+        SpellMorph_SoftResetCache();
+        update = false;
+    }
+    else if (strncmp(cmd, "SET:HIDE_IMPACT:", 16) == 0) {
+        SetHideImpact(atoi(cmd + 16) > 0);
+        SpellMorph_SoftResetCache();
+        update = false;
+    }
+    else if (strncmp(cmd, "SET:HIDE_IMPACT_CASTER:", 23) == 0) {
+        SetHideImpactCaster(atoi(cmd + 23) > 0);
+        SpellMorph_SoftResetCache();
+        update = false;
+    }
     else if (strncmp(cmd, "SET:HIDE_IMPACT_TARGET:", 23) == 0) {
-        SetHideImpactTarget(atoi(cmd + 23) > 0);
+        SetHideTargetImpact(atoi(cmd + 23) > 0);
         SpellMorph_SoftResetCache();
         update = false;
     }
-    else if (strncmp(cmd, "SET:HIDE_IMPACT_AREA:", 21) == 0) {
-        SetHideImpactArea(atoi(cmd + 21) > 0);
+    else if (strncmp(cmd, "SET:HIDE_AREA_INSTANT:", 22) == 0) {
+        SetHideAreaInstant(atoi(cmd + 22) > 0);
         SpellMorph_SoftResetCache();
         update = false;
     }
-    else if (strncmp(cmd, "SET:HIDE_GROUND:", 16) == 0) {
-        SetHideGround(atoi(cmd + 16) > 0);
+    else if (strncmp(cmd, "SET:HIDE_AREA_IMPACT:", 21) == 0) {
+        SetHideAreaImpact(atoi(cmd + 21) > 0);
+        SpellMorph_SoftResetCache();
+        update = false;
+    }
+    else if (strncmp(cmd, "SET:HIDE_AREA_PERSISTENT:", 25) == 0) {
+        SetHideAreaPersistent(atoi(cmd + 25) > 0);
         SpellMorph_SoftResetCache();
         update = false;
     }
@@ -1009,13 +1034,18 @@ bool DoMorph(const char* cmd, WowObject* player) {
         SpellMorph_SoftResetCache();
         update = false;
     }
-    else if (strncmp(cmd, "SET:HIDE_AURA:", 14) == 0) {
-        SetHideAura(atoi(cmd + 14) > 0);
+    else if (strncmp(cmd, "SET:HIDE_MISSILE_MARKER:", 24) == 0) {
+        SetHideMissileMarker(atoi(cmd + 24) > 0);
         SpellMorph_SoftResetCache();
         update = false;
     }
-    else if (strncmp(cmd, "SET:HIDE_AUDIO:", 15) == 0) {
-        SetHideAudio(atoi(cmd + 15) > 0);
+    else if (strncmp(cmd, "SET:HIDE_SOUND_MISSILE:", 23) == 0) {
+        SetHideSoundMissile(atoi(cmd + 23) > 0);
+        SpellMorph_SoftResetCache();
+        update = false;
+    }
+    else if (strncmp(cmd, "SET:HIDE_SOUND_EVENT:", 21) == 0) {
+        SetHideSoundEvent(atoi(cmd + 21) > 0);
         SpellMorph_SoftResetCache();
         update = false;
     }

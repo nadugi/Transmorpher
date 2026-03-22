@@ -109,49 +109,66 @@ end
 
 
 local cbHideAll = CreateOptCheckbox("HideAll", "|cffFF4444[MASTER] Hide ALL Spells|r", "Completely disables all spell visuals globally for peak FPS.", "hideAllSpells", "HIDE_ALL")
-cbHideAll:SetPoint("TOPLEFT", 16, -40)
-
+cbHideAll:SetPoint("TOPLEFT", 16, -52)
 
 local sep1 = optCard:CreateTexture(nil, "ARTWORK")
-sep1:SetSize(350, 1); sep1:SetPoint("TOPLEFT", 16, -88); sep1:SetTexture(1, 1, 1, 0.05)
+sep1:SetSize(400, 1); sep1:SetPoint("TOPLEFT", 16, -86); sep1:SetTexture(1, 1, 1, 0.08)
 
--- Group 1: Casting & Auras
+-- Column 1
+local col1X = 22
+local yPos1 = -98
+local rowH = 22
+local secGap = 32
+
 local sub1 = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-sub1:SetPoint("TOPLEFT", 16, -100); sub1:SetText("|cffA3A3A3Casting & Auras|r")
+sub1:SetPoint("TOPLEFT", 18, yPos1); sub1:SetText("|cffA3A3A3Casting & Auras|r")
+yPos1 = yPos1 - 18
 
-local cbHidePre = CreateOptCheckbox("HidePre", "Pre-Cast Hand Glows", "Hides hand glows before a spell launches.", "hidePrecast", "HIDE_PRECAST")
-cbHidePre:SetPoint("TOPLEFT", 20, -120)
+CreateOptCheckbox("HidePre", "Pre-Cast Hand Glows", "Hides hand glows before a spell launches.", "hidePrecast", "HIDE_PRECAST"):SetPoint("TOPLEFT", col1X, yPos1); yPos1 = yPos1 - rowH
+CreateOptCheckbox("HideCast", "Casting Animations", "Hides main character casting visuals.", "hideCast", "HIDE_CAST"):SetPoint("TOPLEFT", col1X, yPos1); yPos1 = yPos1 - rowH
+CreateOptCheckbox("HideChan", "Channeled Beams", "Hides beams like Mind Flay or Drain Life.", "hideChannel", "HIDE_CHANNEL"):SetPoint("TOPLEFT", col1X, yPos1); yPos1 = yPos1 - secGap
 
-local cbHideCast = CreateOptCheckbox("HideCast", "Casting Animations", "Hides main character casting visuals.", "hideCast", "HIDE_CAST")
-cbHideCast:SetPoint("TOPLEFT", 20, -145)
-
-local cbHideChan = CreateOptCheckbox("HideChan", "Channeled Beams", "Hides beams like Mind Flay or Drain Life.", "hideChannel", "HIDE_CHANNEL")
-cbHideChan:SetPoint("TOPLEFT", 20, -170)
-
-local cbHideAura = CreateOptCheckbox("HideAura", "Buff & Aura Visuals", "Hides character procs and aura visuals.", "hideAura", "HIDE_AURA")
-cbHideAura:SetPoint("TOPLEFT", 20, -195)
-
-local sep2 = optCard:CreateTexture(nil, "ARTWORK")
-sep2:SetSize(350, 1); sep2:SetPoint("TOPLEFT", 16, -225); sep2:SetTexture(1, 1, 1, 0.05)
-
--- Group 2: Impacts & World
 local sub2 = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-sub2:SetPoint("TOPLEFT", 16, -235); sub2:SetText("|cffA3A3A3Impacts & World|r")
+sub2:SetPoint("TOPLEFT", 18, yPos1); sub2:SetText("|cffA3A3A3Aura Application|r")
+yPos1 = yPos1 - 18
 
-local cbHideHitT = CreateOptCheckbox("HideHitT", "Impact (on Target)", "Hides hit flashes on characters.", "hideImpactTarget", "HIDE_IMPACT_TARGET")
-cbHideHitT:SetPoint("TOPLEFT", 20, -255)
+CreateOptCheckbox("HideAuraS", "Aura Apply (Start)", "Hides visuals triggered when an aura is applied.", "hideAuraStart", "HIDE_AURA_START"):SetPoint("TOPLEFT", col1X, yPos1); yPos1 = yPos1 - rowH
+CreateOptCheckbox("HideAuraE", "Aura Remove (End)", "Hides visuals triggered when an aura expires.", "hideAuraEnd", "HIDE_AURA_END"):SetPoint("TOPLEFT", col1X, yPos1); yPos1 = yPos1 - secGap
 
-local cbHideHitA = CreateOptCheckbox("HideHitA", "Impact (Area Flashes)", "Hides secondary area flashes.", "hideImpactArea", "HIDE_IMPACT_AREA")
-cbHideHitA:SetPoint("TOPLEFT", 20, -280)
+local sub3 = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+sub3:SetPoint("TOPLEFT", 18, yPos1); sub3:SetText("|cffA3A3A3Impacts (Self)|r")
+yPos1 = yPos1 - 18
 
-local cbHideGround = CreateOptCheckbox("HideGround", "Persistent Ground Effects", "Hides ground effects like Consecration (Highly Recommended).", "hideGround", "HIDE_GROUND")
-cbHideGround:SetPoint("TOPLEFT", 20, -305)
+CreateOptCheckbox("HideImpG", "Hit (Hand Effect)", "Hides generic hit effects usually attached to hands.", "hideImpact", "HIDE_IMPACT"):SetPoint("TOPLEFT", col1X, yPos1); yPos1 = yPos1 - rowH
+CreateOptCheckbox("HideImpC", "Impact (Caster)", "Hides caster-side impact visuals.", "hideImpactCaster", "HIDE_IMPACT_CASTER"):SetPoint("TOPLEFT", col1X, yPos1)
 
-local cbHideMiss = CreateOptCheckbox("HideMiss", "Missiles & Projectiles", "Hides traveling bolts (Wrath, Fireball) and arrows.", "hideMissile", "HIDE_MISSILE")
-cbHideMiss:SetPoint("TOPLEFT", 20, -330)
 
-local cbHideAudio = CreateOptCheckbox("HideAudio", "|cffFFD100Suppress Spell Sounds|r", "Mutes spell-related missile and impact audio.", "hideAudio", "HIDE_AUDIO")
-cbHideAudio:SetPoint("TOPLEFT", 20, -355)
+-- Column 2
+local col2X = 240
+local yPos2 = -98
+
+local sub4 = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+sub4:SetPoint("TOPLEFT", col2X - 4, yPos2); sub4:SetText("|cffA3A3A3World & Target Impacts|r")
+yPos2 = yPos2 - 18
+
+CreateOptCheckbox("HideImpT", "Impact (Target)", "Hides hit visuals on the target character.", "hideTargetImpact", "HIDE_IMPACT_TARGET"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - rowH
+CreateOptCheckbox("HideAreaI", "Area (Instant Kit)", "Hides instant area-of-effect visuals.", "hideAreaInstant", "HIDE_AREA_INSTANT"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - rowH
+CreateOptCheckbox("HideAreaM", "Area (Impact Kit)", "Hides area visuals triggered on impact.", "hideAreaImpact", "HIDE_AREA_IMPACT"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - rowH
+CreateOptCheckbox("HideAreaP", "Area (Persistent)", "Hides persistent ground effects like Consecration.", "hideAreaPersistent", "HIDE_AREA_PERSISTENT"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - secGap
+
+local sub5 = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+sub5:SetPoint("TOPLEFT", col2X - 4, yPos2); sub5:SetText("|cffA3A3A3Missiles & Markers|r")
+yPos2 = yPos2 - 18
+
+CreateOptCheckbox("HideMiss", "Missile Projectiles", "Hides traveling bolts (Fireball, Frostbolt) and arrows.", "hideMissile", "HIDE_MISSILE"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - rowH
+CreateOptCheckbox("HideMissM", "Missile Markers", "Hides markers where missiles land.", "hideMissileMarker", "HIDE_MISSILE_MARKER"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - secGap
+
+local sub6 = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+sub6:SetPoint("TOPLEFT", col2X - 4, yPos2); sub6:SetText("|cffA3A3A3Audio Suppression|r")
+yPos2 = yPos2 - 18
+
+CreateOptCheckbox("HideSndM", "Missile Sounds", "Suppresses sounds of traveling projectiles.", "hideSoundMissile", "HIDE_SOUND_MISSILE"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - rowH
+CreateOptCheckbox("HideSndE", "Impact & Event Sounds", "Suppresses sounds triggered by impacts or events.", "hideSoundEvent", "HIDE_SOUND_EVENT"):SetPoint("TOPLEFT", col2X, yPos2)
 
 -- ============================================================
 -- ENVIRONMENT PANEL (Existing)
