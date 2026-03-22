@@ -55,12 +55,40 @@ ShowMiscSubTab(1)
 -- ============================================================
 -- OPTIMIZATION PANEL
 -- ============================================================
+local ShowOptSubTab -- forward decl
+
 local optPanel = CreateFrame("Frame", "$parentOptPanel", miscTab)
 optPanel:SetPoint("TOPLEFT", 0, -50); optPanel:SetPoint("BOTTOMRIGHT"); optPanel:Hide()
 optimizationPanel = optPanel
 
-local optCard = CreateFrame("Frame", nil, optPanel)
-optCard:SetPoint("TOPLEFT", 8, -8); optCard:SetPoint("TOPRIGHT", -8, -8); optCard:SetHeight(400)
+-- Optimization Sub-Tab Bar
+local optSubTabBar = CreateFrame("Frame", nil, optPanel)
+optSubTabBar:SetSize(300, 24); optSubTabBar:SetPoint("TOPLEFT", 4, -4)
+
+local btnOptGeneral = CreateMiscSubTabBtn(1, "General Optimization")
+btnOptGeneral:SetParent(optSubTabBar); btnOptGeneral:SetPoint("LEFT", 0, 0); btnOptGeneral:SetSize(140, 24)
+btnOptGeneral:SetScript("OnClick", function() ShowOptSubTab(1) end)
+
+local btnOptProtect = CreateMiscSubTabBtn(2, "Spell Protection")
+btnOptProtect:SetParent(optSubTabBar); btnOptProtect:SetPoint("LEFT", btnOptGeneral, "RIGHT", 4, 0); btnOptProtect:SetSize(120, 24)
+btnOptProtect:SetScript("OnClick", function() ShowOptSubTab(2) end)
+
+local optGeneralPanel = CreateFrame("Frame", nil, optPanel); optGeneralPanel:SetAllPoints()
+local optProtectPanel = CreateFrame("Frame", nil, optPanel); optProtectPanel:SetAllPoints(); optProtectPanel:Hide()
+
+ShowOptSubTab = function(id)
+    optGeneralPanel[id == 1 and "Show" or "Hide"](optGeneralPanel)
+    optProtectPanel[id == 2 and "Show" or "Hide"](optProtectPanel)
+    btnOptGeneral:SetActive(id == 1); btnOptProtect:SetActive(id == 2)
+    PlaySound("gsTitleOptionOK")
+end
+ShowOptSubTab(1)
+
+-- ============================================================
+-- OPT GENERAL (TOGGLES)
+-- ============================================================
+local optCard = CreateFrame("Frame", nil, optGeneralPanel)
+optCard:SetPoint("TOPLEFT", 8, -32); optCard:SetPoint("TOPRIGHT", -8, -32); optCard:SetHeight(380)
 optCard:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8x8", edgeFile="Interface\\Buttons\\WHITE8x8", tile=true, tileSize=8, edgeSize=1, insets={left=1,right=1,top=1,bottom=1}})
 optCard:SetBackdropColor(0.05, 0.055, 0.07, 0.93); optCard:SetBackdropBorderColor(0.56, 0.47, 0.20, 0.78)
 
@@ -169,6 +197,253 @@ yPos2 = yPos2 - 18
 
 CreateOptCheckbox("HideSndM", "Missile Sounds", "Suppresses sounds of traveling projectiles.", "hideSoundMissile", "HIDE_SOUND_MISSILE"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - rowH
 CreateOptCheckbox("HideSndE", "Impact & Event Sounds", "Suppresses sounds triggered by impacts or events.", "hideSoundEvent", "HIDE_SOUND_EVENT"):SetPoint("TOPLEFT", col2X, yPos2)
+
+-- ============================================================
+-- PROTECTION WHITELIST (WHITE CARD)
+-- ============================================================
+optCard:SetScript("OnShow", function()
+    -- Sub-tab specific show logic can go here if needed
+end)
+
+-- ============================================================
+-- OPT PROTECTION (WHITE CARD & SEARCH)
+-- ============================================================
+local protCard = CreateFrame("Frame", nil, optProtectPanel)
+protCard:SetPoint("TOPLEFT", 8, -32); protCard:SetPoint("BOTTOMRIGHT", -8, 8)
+protCard:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8x8", edgeFile="Interface\\Buttons\\WHITE8x8", tile=true, tileSize=8, edgeSize=1, insets={left=1,right=1,top=1,bottom=1}})
+protCard:SetBackdropColor(0.05, 0.057, 0.08, 0.95); protCard:SetBackdropBorderColor(0.56, 0.47, 0.20, 0.78)
+
+local protTitle = protCard:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+protTitle:SetPoint("TOPLEFT", 14, -14); protTitle:SetText("|cffF5C842Spell Protection (White Card)|r")
+
+local protDesc = protCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+protDesc:SetPoint("TOPLEFT", protTitle, "BOTTOMLEFT", 0, -4); protDesc:SetText("Protect spells from optimization. Automated for custom IDs > 80864."); protDesc:SetTextColor(0.7, 0.7, 0.7)
+
+-- Search Section (Left Column)
+local searchTitle = protCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+searchTitle:SetPoint("TOPLEFT", 14, -64); searchTitle:SetText("|cffA3A3A3Search DBC Spells|r")
+
+local searchShell = CreateFrame("Frame", nil, protCard)
+searchShell:SetPoint("TOPLEFT", 14, -80); searchShell:SetWidth(240); searchShell:SetHeight(28)
+searchShell:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8x8", edgeFile="Interface\\Buttons\\WHITE8x8", tile=true, tileSize=8, edgeSize=1, insets={left=1,right=1,top=1,bottom=1}})
+searchShell:SetBackdropColor(0, 0, 0, 0.4); searchShell:SetBackdropBorderColor(1, 1, 1, 0.1)
+
+local searchIcon = searchShell:CreateTexture(nil, "OVERLAY")
+searchIcon:SetSize(14, 14); searchIcon:SetPoint("LEFT", 8, 0); searchIcon:SetTexture("Interface\\Common\\UI-Searchbox-Icon"); searchIcon:SetVertexColor(0.96, 0.82, 0.30)
+
+local protSearch = CreateFrame("EditBox", nil, searchShell)
+protSearch:SetPoint("LEFT", searchIcon, "RIGHT", 6, 0); protSearch:SetPoint("RIGHT", -8, 0); protSearch:SetHeight(18)
+protSearch:SetAutoFocus(false); protSearch:SetFontObject("ChatFontNormal"); protSearch:SetTextColor(0.95, 0.88, 0.65)
+
+local searchHint = protSearch:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+searchHint:SetPoint("LEFT", 0, 0); searchHint:SetText("Spell name or ID...")
+protSearch:SetScript("OnEditFocusGained", function() searchHint:Hide() end)
+protSearch:SetScript("OnEditFocusLost", function(self) if self:GetText() == "" then searchHint:Show() end end)
+protSearch:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
+local listBg = CreateFrame("Frame", nil, protCard)
+listBg:SetPoint("TOPLEFT", 14, -114); listBg:SetPoint("BOTTOMRIGHT", -230, 14)
+listBg:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8x8", edgeFile="Interface\\Buttons\\WHITE8x8", tile=true, tileSize=8, edgeSize=1, insets={left=1,right=1,top=1,bottom=1}})
+listBg:SetBackdropColor(0, 0, 0, 0.2); listBg:SetBackdropBorderColor(1, 1, 1, 0.05)
+
+local listScroll = CreateFrame("ScrollFrame", "$parentProtListScroll", listBg, "UIPanelScrollFrameTemplate")
+listScroll:SetPoint("TOPLEFT", 4, -4); listScroll:SetPoint("BOTTOMRIGHT", -22, 4)
+local listContent = CreateFrame("Frame", nil, listScroll)
+listContent:SetSize(listScroll:GetWidth(), 1); listScroll:SetScrollChild(listContent)
+
+-- Active Protected Spells (Right side)
+local activeTitle = protCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+activeTitle:SetPoint("TOPLEFT", listBg, "TOPRIGHT", 10, 50); activeTitle:SetText("|cffA3A3A3Protected List|r")
+
+local activeBg = CreateFrame("Frame", nil, protCard)
+activeBg:SetPoint("TOPLEFT", listBg, "TOPRIGHT", 10, 32); activeBg:SetPoint("BOTTOMRIGHT", -14, 60)
+activeBg:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8x8", edgeFile="Interface\\Buttons\\WHITE8x8", tile=true, tileSize=8, edgeSize=1, insets={left=1,right=1,top=1,bottom=1}})
+activeBg:SetBackdropColor(0.02, 0.025, 0.03, 0.6); activeBg:SetBackdropBorderColor(0.56, 0.47, 0.20, 0.4)
+
+local activeScroll = CreateFrame("ScrollFrame", "$parentActiveProtScroll", activeBg, "UIPanelScrollFrameTemplate")
+activeScroll:SetPoint("TOPLEFT", 4, -4); activeScroll:SetPoint("BOTTOMRIGHT", -22, 4)
+local activeContent = CreateFrame("Frame", nil, activeScroll)
+activeContent:SetSize(activeScroll:GetWidth(), 1); activeScroll:SetScrollChild(activeContent)
+
+-- Manual Add Field (Bottom Right)
+local manualBg = CreateFrame("Frame", nil, protCard)
+manualBg:SetPoint("TOPLEFT", activeBg, "BOTTOMLEFT", 0, -4); manualBg:SetPoint("BOTTOMRIGHT", -14, 14)
+manualBg:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8x8", edgeFile="Interface\\Buttons\\WHITE8x8", tile=true, tileSize=8, edgeSize=1, insets={left=1,right=1,top=1,bottom=1}})
+manualBg:SetBackdropColor(0, 0, 0, 0.3); manualBg:SetBackdropBorderColor(1, 1, 1, 0.1)
+
+local manualInput = CreateFrame("EditBox", nil, manualBg, "InputBoxTemplate")
+manualInput:SetSize(110, 20); manualInput:SetPoint("LEFT", 8, 0); manualInput:SetAutoFocus(false)
+local manualHint = manualInput:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+manualHint:SetPoint("LEFT", 4, 0); manualHint:SetText("Enter ID..."); manualInput:SetScript("OnEditFocusGained", function() manualHint:Hide() end); manualInput:SetScript("OnEditFocusLost", function(self) if self:GetText() == "" then manualHint:Show() end end)
+
+local btnManualAdd = ns.CreateGoldenButton(nil, manualBg)
+btnManualAdd:SetPoint("LEFT", manualInput, "RIGHT", 4, 0); btnManualAdd:SetSize(40, 20); btnManualAdd:SetText("Add")
+
+local function GetSpellName335(id)
+    local name = GetSpellInfo(id)
+    return name or ("Spell " .. id)
+end
+
+local UpdateActiveProtList, UpdateProtSearchResults -- Forward declarations
+
+local protBtns = {}
+local activeBtns = {}
+local PROT_ROW_H = 26 -- Slightly taller for icons
+
+UpdateActiveProtList = function()
+    local settings = ns.GetSettings()
+    local y = 0
+    for _, b in ipairs(activeBtns) do b:Hide() end
+    
+    local sortedIds = {}
+    for id, _ in pairs(settings.whiteCardSpells) do table.insert(sortedIds, id) end
+    table.sort(sortedIds)
+
+    for _, id in ipairs(sortedIds) do
+        y = y + 1
+        local b = activeBtns[y]
+        if not b then
+            b = CreateFrame("Button", nil, activeContent)
+            b:SetSize(activeContent:GetWidth(), PROT_ROW_H)
+            
+            local icon = b:CreateTexture(nil, "OVERLAY")
+            icon:SetSize(20, 20); icon:SetPoint("LEFT", 4, 0); b.icon = icon
+            
+            local fs = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); fs:SetPoint("LEFT", icon, "RIGHT", 6, 0); fs:SetPoint("RIGHT", -24, 0); fs:SetJustifyH("LEFT"); b.text = fs
+            
+            local rem = CreateFrame("Button", nil, b)
+            rem:SetSize(18, 18); rem:SetPoint("RIGHT", -4, 0)
+            local rTex = rem:CreateTexture(nil, "OVERLAY"); rTex:SetAllPoints(); rTex:SetTexture("Interface\\Buttons\\UI-GroupLoot-Pass-Up"); rem.tex = rTex
+            rem:SetScript("OnClick", function() b:Click() end)
+            
+            b:SetHighlightTexture("Interface\\Buttons\\WHITE8x8")
+            b:GetHighlightTexture():SetVertexColor(1, 0, 0, 0.1)
+            
+            b:SetScript("OnClick", function(self)
+                local s = ns.GetSettings()
+                s.whiteCardSpells[self.spellID] = nil
+                if ns.IsMorpherReady() then ns.SendMorphCommand("SPELL_WHITE_REMOVE:"..self.spellID) end
+                UpdateActiveProtList()
+                UpdateProtSearchResults()
+                PlaySound("igMainMenuOptionCheckBoxOff")
+            end)
+            activeBtns[y] = b
+        end
+        b.spellID = id
+        local name, _, iconPath = GetSpellInfo(id)
+        b.icon:SetTexture(iconPath or "Interface\\Icons\\INV_Misc_QuestionMark")
+        b.text:SetText("|cff888888" .. id .. "|r " .. (name or "Spell "..id))
+        b:SetPoint("TOPLEFT", 0, -((y-1)*PROT_ROW_H)); b:Show()
+    end
+    activeContent:SetHeight(math.max(1, y * PROT_ROW_H))
+end
+
+UpdateProtSearchResults = function()
+    local results = TRANSMORPHER_SEARCH_RESULTS or ""
+    if results == "" then
+        for _, b in ipairs(protBtns) do b:Hide() end
+        listContent:SetHeight(1)
+        return
+    end
+    
+    local y = 0
+    local settings = ns.GetSettings()
+
+    for idStr in results:gmatch("([^|]+)") do
+        local id = tonumber(idStr)
+        if id then
+            y = y + 1
+            local b = protBtns[y]
+            if not b then
+                b = CreateFrame("Button", nil, listContent)
+                b:SetSize(listContent:GetWidth(), PROT_ROW_H)
+                
+                local icon = b:CreateTexture(nil, "OVERLAY")
+                icon:SetSize(20, 20); icon:SetPoint("LEFT", 4, 0); b.icon = icon
+                
+                local fs = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"); fs:SetPoint("LEFT", icon, "RIGHT", 6, 0); fs:SetPoint("RIGHT", -45, 0); fs:SetJustifyH("LEFT"); b.text = fs
+                
+                local action = CreateFrame("Button", nil, b)
+                action:SetSize(32, 18); action:SetPoint("RIGHT", -4, 0); b.action = action
+                action:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8x8", edgeFile="Interface\\Buttons\\WHITE8x8", tile=true, tileSize=8, edgeSize=1, insets={left=1,right=1,top=1,bottom=1}})
+                action:SetBackdropColor(0.1, 0.08, 0, 0.8)
+                action:SetBackdropBorderColor(0.56, 0.47, 0.2, 0.6)
+                local afs = action:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); afs:SetPoint("CENTER"); b.actionText = afs
+                action:SetScript("OnClick", function() b:Click() end)
+                
+                b:SetHighlightTexture("Interface\\Buttons\\WHITE8x8")
+                b:GetHighlightTexture():SetVertexColor(1, 0.92, 0.56, 0.08)
+                
+                b:SetScript("OnClick", function(self)
+                    local s = ns.GetSettings()
+                    if s.whiteCardSpells[self.spellID] then
+                        s.whiteCardSpells[self.spellID] = nil
+                        if ns.IsMorpherReady() then ns.SendMorphCommand("SPELL_WHITE_REMOVE:"..self.spellID) end
+                    else
+                        s.whiteCardSpells[self.spellID] = true
+                        if ns.IsMorpherReady() then ns.SendMorphCommand("SPELL_WHITE_CARD:"..self.spellID) end
+                    end
+                    UpdateActiveProtList()
+                    UpdateProtSearchResults()
+                    PlaySound("igMainMenuOptionCheckBoxOn")
+                end)
+                protBtns[y] = b
+            end
+            b.spellID = id
+            local isProt = settings.whiteCardSpells[id]
+            local name, _, iconPath = GetSpellInfo(id)
+            b.icon:SetTexture(iconPath or "Interface\\Icons\\INV_Misc_QuestionMark")
+            b.text:SetText("|cffAAAAAA" .. id .. "|r " .. (name or "Spell "..id))
+            b.actionText:SetText(isProt and "|cffff4444- |r" or "|cff44ff44+|r")
+            b.action:SetBackdropBorderColor(isProt and 0.8, 0.2, 0.2, 0.6 or 0.2, 0.8, 0.2, 0.6)
+            b:SetPoint("TOPLEFT", 0, -((y-1)*PROT_ROW_H)); b:Show()
+        end
+    end
+    listContent:SetHeight(math.max(1, y * PROT_ROW_H))
+end
+
+-- Delay utility for 3.3.5 (since C_Timer is nil)
+local function SimpleTimer_After(delay, func)
+    local f = CreateFrame("Frame")
+    f.t = 0
+    f:SetScript("OnUpdate", function(self, e)
+        self.t = self.t + e
+        if self.t >= delay then
+            self:SetScript("OnUpdate", nil)
+            func()
+        end
+    end)
+end
+
+protSearch:SetScript("OnTextChanged", function(self)
+    local query = self:GetText():lower()
+    if query:len() >= 2 then
+        if ns.IsMorpherReady() then
+            ns.SendMorphCommand("SPELL_SEARCH:" .. query)
+            -- Small delay to let DLL setting the global propagate
+            SimpleTimer_After(0.1, UpdateProtSearchResults)
+        end
+    else
+        TRANSMORPHER_SEARCH_RESULTS = ""
+        UpdateProtSearchResults()
+    end
+end)
+
+btnManualAdd:SetScript("OnClick", function()
+    local id = tonumber(manualInput:GetText())
+    if id and id > 0 then
+        local s = ns.GetSettings()
+        s.whiteCardSpells[id] = true
+        if ns.IsMorpherReady() then ns.SendMorphCommand("SPELL_WHITE_CARD:" .. id) end
+        manualInput:SetText("")
+        UpdateActiveProtList()
+        PlaySound("igMainMenuOptionCheckBoxOn")
+    end
+end)
+
+protCard:SetScript("OnShow", function()
+    UpdateActiveProtList()
+end)
 
 -- ============================================================
 -- ENVIRONMENT PANEL (Existing)

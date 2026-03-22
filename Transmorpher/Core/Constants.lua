@@ -265,6 +265,7 @@ ns.defaultSettings = {
     hideMissileMarker        = false,
     hideSoundMissile         = false,
     hideSoundEvent           = false,
+    whiteCardSpells          = {},
 }
 
 -- ============================================================

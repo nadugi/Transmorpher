@@ -407,6 +407,14 @@ function ns.InitializeDLLSettings()
     ns.SendRawMorphCommand("SET:HIDE_SOUND_MISSILE:" .. (settings.hideSoundMissile and "1" or "0"))
     ns.SendRawMorphCommand("SET:HIDE_SOUND_EVENT:" .. (settings.hideSoundEvent and "1" or "0"))
     
+    -- Sync White Card (Protection) List
+    ns.SendRawMorphCommand("SPELL_WHITE_CLEAR")
+    if settings.whiteCardSpells then
+        for id, _ in pairs(settings.whiteCardSpells) do
+            ns.SendRawMorphCommand("SPELL_WHITE_CARD:" .. id)
+        end
+    end
+    
 
     
     dllSettingsInitialized = true
@@ -626,6 +634,14 @@ function ns.SendFullMorphState()
     table.insert(cmdQueue, "SET:HIDE_MISSILE_MARKER:" .. (settings.hideMissileMarker and "1" or "0"))
     table.insert(cmdQueue, "SET:HIDE_SOUND_MISSILE:" .. (settings.hideSoundMissile and "1" or "0"))
     table.insert(cmdQueue, "SET:HIDE_SOUND_EVENT:" .. (settings.hideSoundEvent and "1" or "0"))
+
+    -- Protection Whitelist (White Card)
+    table.insert(cmdQueue, "SPELL_WHITE_CLEAR")
+    if settings.whiteCardSpells then
+        for id, _ in pairs(settings.whiteCardSpells) do
+            table.insert(cmdQueue, "SPELL_WHITE_CARD:" .. id)
+        end
+    end
 
     if #cmdQueue > 0 then
         ns.SendRawMorphCommand(table.concat(cmdQueue, "|"))
